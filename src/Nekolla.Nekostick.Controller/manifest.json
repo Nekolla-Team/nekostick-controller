@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "nekolla.nekostick.controller",
+  "version": "1.0.0",
+  "entryAssembly": "Nekolla.Nekostick.Controller.dll",
+  "entryType": "Nekolla.Nekostick.Controller.ControllerEntrypoint",
+  "dependencies": [],
+  "requiredHostApiVersion": ">=1.2.0 <2.0.0",
+  "exports": [],
+  "imports": []
+}

@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package nekostick.controller.management.v1;
+
+option csharp_namespace = "Nekolla.Nekostick.Controller.Grpc";
+
+// Versioned, transport-neutral unary gateway for the canonical /v1 management API.
+// Authentication is carried only by gRPC metadata named x-nekostick-controller-key.
+// The metadata value is mandatory; it must not be copied into the request envelope.
+service ControllerManagement {
+  rpc Invoke(InvokeRequest) returns (InvokeResponse);
+}
+
+message Header {
+  string name = 1;
+  repeated string values = 2;
+}
+
+message InvokeRequest {
+  // The canonical HTTP-style verb, for example GET or PUT.
+  string method = 1;
+  // The canonical /v1 resource path.
+  string path = 2;
+  // Protocol metadata for the management request. Authentication is not carried here.
+  // The x-nekostick-controller-key header is forbidden in this envelope; clients MUST
+  // send it only as gRPC metadata.
+  repeated Header headers = 3;
+  // The bounded canonical JSON request body.
+  bytes body = 4;
+}
+
+message InvokeResponse {
+  // HTTP-compatible status for adapter translation.
+  int32 status_code = 1;
+  // Stable dispatch category (for example success, conflict, or unavailable).
+  string code = 2;
+  // Canonical response metadata.
+  repeated Header headers = 3;
+  // Canonical JSON response envelope bytes.
+  bytes body = 4;
+}

@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Nekolla.Nekostick.Controller/Nekolla.Nekostick.Controller.csproj" />
+  </Folder>
+</Solution>
