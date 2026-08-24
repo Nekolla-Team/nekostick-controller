@@ -10,7 +10,7 @@ namespace Nekolla.Nekostick.Controller;
 /// </summary>
 public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
 {
-    private static readonly HostApiVersion MinimumConfigurationApiVersion = new(1, 2, 0);
+    private static readonly HostApiVersion MinimumConfigurationApiVersion = new(1, 3, 0);
 
     private readonly ControllerOptions? _explicitOptions;
     private readonly IControllerManagementHandlerFactory? _handlerFactory;
@@ -20,6 +20,7 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
     private ControllerRuntime? _runtime;
     private bool _startupFailed;
     private bool _successfullyStopped;
+    private bool _bootstrapSecretEmitted;
     private int _disposed;
 
     /// <summary>Creates a controller that hydrates options from the host configuration snapshot.</summary>
@@ -65,7 +66,7 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            EnsureHostApiCompatibility(context);
+            var host13 = EnsureHostApiCompatibility(context);
 
             if (_successfullyStopped)
             {
@@ -136,7 +137,7 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
                     cancellationToken).ConfigureAwait(false);
                 if (runtime.IsEphemeralBootstrap && runtime.BootstrapRouteProvisioned)
                 {
-                    EmitBootstrapSecretNoOp(_bootstrapOptions!.ApiKey!);
+                    EmitBootstrapSecret(host13);
                 }
                 context.Host.Status.Report(new ExtensionStatus(ExtensionStatusKind.Healthy, "ready"));
             }
@@ -223,20 +224,45 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
         return _bootstrapOptions;
     }
 
-    private static void EmitBootstrapSecretNoOp(string _)
+    private void EmitBootstrapSecret(IExtensionHostBridge13 host13)
     {
-        // TODO: emit the bootstrap secret through the private lifecycle channel once that ABI exists.
-    }
-
-    private static void EnsureHostApiCompatibility(IExtensionStartContext context)
-    {
-        if (ExtensionAbi.IsCompatible(MinimumConfigurationApiVersion, context.Host.ApiVersion))
+        if (_bootstrapSecretEmitted)
         {
             return;
         }
 
-        ReportDegraded(context, "configuration.host_api_unsupported");
-        throw new InvalidOperationException("The controller host API is unsupported.");
+        var options = _bootstrapOptions;
+        if (options?.HostRoutePath is not { } routePath || options.ApiKey is not { } apiKey)
+        {
+            throw new InvalidOperationException("The ephemeral bootstrap secret is unavailable.");
+        }
+
+        var message = $"Controller bootstrap route: {routePath}; API key: {apiKey}";
+        if (string.IsNullOrWhiteSpace(message) ||
+            message.Length > ExtensionLogLimits.MaximumTextLength ||
+            message.Any(char.IsControl))
+        {
+            throw new InvalidOperationException("The ephemeral bootstrap secret message is invalid.");
+        }
+
+        // Mark before crossing the host boundary so a failed startup retry cannot duplicate an
+        // emission that may already have been accepted by the host logger.
+        _bootstrapSecretEmitted = true;
+        host13.LogWriter.WriteText(ExtensionLogLevel.Information, message);
+    }
+
+    private static IExtensionHostBridge13 EnsureHostApiCompatibility(IExtensionStartContext context)
+    {
+        if (!ExtensionAbi.IsCompatible(MinimumConfigurationApiVersion, context.Host.ApiVersion) ||
+            !ExtensionAbi.IsApi13Supported(context.Host.ApiVersion) ||
+            context.Host is not IExtensionHostBridge13 host13 ||
+            host13.LogWriter is null)
+        {
+            ReportDegraded(context, "configuration.host_api_unsupported");
+            throw new InvalidOperationException("The controller host API is unsupported.");
+        }
+
+        return host13;
     }
 
     private static async ValueTask<ControllerOptions?> HydrateOptionsAsync(

@@ -11,7 +11,7 @@ namespace Nekolla.Nekostick.Controller;
 
 internal readonly record struct ProvisionedHostRouteIdentity(Guid RouteId, string CanonicalPath);
 
-/// <summary>Translates REST resource requests into the Host 1.2 full-configuration facade.</summary>
+/// <summary>Translates REST resource requests into the Host 1.3 full-configuration facade.</summary>
 internal sealed class ControllerManagementCore
 {
     private readonly ControllerOptions _options;
@@ -29,7 +29,7 @@ internal sealed class ControllerManagementCore
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
         if (_bridge is null) return ControllerManagementResponseBuilder.Unavailable;
-        if (!HasFullConfigurationScope() || !ExtensionAbi.IsCompatible(new HostApiVersion(1, 2, 0), _bridge.ApiVersion)) return ControllerManagementResponseBuilder.Unsupported;
+        if (!HasFullConfigurationScope() || !ExtensionAbi.IsApi13Supported(_bridge.ApiVersion)) return ControllerManagementResponseBuilder.Unsupported;
 
         var method = request.Method.Trim().ToUpperInvariant();
         var path = NormalizePath(request.Path, request.Transport);
@@ -53,6 +53,9 @@ internal sealed class ControllerManagementCore
                     "POST" => await CreateRouteAsync(request, cancellationToken).ConfigureAwait(false),
                     _ => ControllerManagementResponseBuilder.MethodNotAllowed
                 };
+            if (path == ControllerManagementApiContract.ServicesRuntimePath)
+                return method == "GET" ? await ReadServiceRuntimesAsync(request, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
+
             if (path == ControllerManagementApiContract.ServicesPath)
                 return method switch
                 {
@@ -87,6 +90,9 @@ internal sealed class ControllerManagementCore
                     "DELETE" => await DeleteRouteAsync(request, routeId, cancellationToken).ConfigureAwait(false),
                     _ => ControllerManagementResponseBuilder.MethodNotAllowed
                 };
+            if (TryGetServiceRuntimePath(path, out var runtimeServiceId))
+                return method == "GET" ? await ReadServiceRuntimeAsync(request, runtimeServiceId, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
+
             if (TryGetMemberPath(path, ControllerManagementApiContract.ServicesPath, out var serviceId))
                 return method switch
                 {
@@ -134,7 +140,7 @@ internal sealed class ControllerManagementCore
     {
         if (!_options.EnableHostRoute) return null;
         var bridge = _bridge ?? throw new InvalidOperationException("The controller bridge is unavailable.");
-        if (!HasFullConfigurationScope() || !ExtensionAbi.IsCompatible(new HostApiVersion(1, 1, 0), bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
+        if (!HasFullConfigurationScope() || !ExtensionAbi.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
 
         var path = _options.HostRoutePath ?? throw new InvalidOperationException("The Host route path is unavailable.");
         if (ownershipMarker is null)
@@ -158,7 +164,7 @@ internal sealed class ControllerManagementCore
         {
             throw new ArgumentException("The route ownership marker is invalid.", nameof(ownershipMarker));
         }
-        // Marker-bearing bootstrap routes use the complete Host 1.2 aggregate so cleanup can prove
+        // Marker-bearing bootstrap routes use the complete Host 1.3 aggregate so cleanup can prove
         // both the handler identity and the private marker before removing a route.
         var read = await bridge.FullConfiguration.ReadAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) throw new InvalidOperationException("The controller route configuration is unavailable.");
@@ -188,7 +194,7 @@ internal sealed class ControllerManagementCore
     {
         ArgumentException.ThrowIfNullOrEmpty(handlerId);
         var bridge = _bridge ?? throw new InvalidOperationException("The controller bridge is unavailable.");
-        if (!HasFullConfigurationScope() || !ExtensionAbi.IsCompatible(new HostApiVersion(1, 2, 0), bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
+        if (!HasFullConfigurationScope() || !ExtensionAbi.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
         var read = await bridge.FullConfiguration.ReadAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) throw new InvalidOperationException("The controller route configuration is unavailable.");
         var stale = snapshot.Routes.Where(route => route.Target is ExtensionHandlerRouteTargetConfiguration target && string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal) && HasBootstrapOwnershipMarker(route.MetadataJson, handlerId)).ToImmutableHashSet();
@@ -296,6 +302,28 @@ internal sealed class ControllerManagementCore
         var read = await ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
         return ControllerManagementResponseBuilder.Success(snapshot.Services.Select(ControllerContractMapper.ToRead).ToImmutableArray(), snapshot.Version);
+    }
+    private async ValueTask<ControllerManagementResponse> ReadServiceRuntimesAsync(ControllerManagementRequest request, CancellationToken cancellationToken)
+    {
+        if (!RequireNoIfMatch(request) || !RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
+        if (_bridge is not IExtensionHostBridge13 bridge13 || !ExtensionAbi.IsApi13Supported(bridge13.ApiVersion)) return ControllerManagementResponseBuilder.Unsupported;
+        var read = await bridge13.Supervisor.ReadAsync(cancellationToken).ConfigureAwait(false);
+        if (!read.IsSuccess) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
+        var snapshots = read.Value.IsDefault
+            ? ImmutableArray<ControllerServiceRuntimeReadDto>.Empty
+            : read.Value.Select(ControllerContractMapper.ToRead).ToImmutableArray();
+        return ControllerManagementResponseBuilder.SuccessUnversioned(snapshots);
+    }
+
+    private async ValueTask<ControllerManagementResponse> ReadServiceRuntimeAsync(ControllerManagementRequest request, Guid serviceId, CancellationToken cancellationToken)
+    {
+        if (!RequireNoIfMatch(request) || !RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
+        if (_bridge is not IExtensionHostBridge13 bridge13 || !ExtensionAbi.IsApi13Supported(bridge13.ApiVersion)) return ControllerManagementResponseBuilder.Unsupported;
+        var read = await bridge13.Supervisor.GetAsync(serviceId, cancellationToken).ConfigureAwait(false);
+        if (!read.IsSuccess) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
+        return read.Value is { } snapshot
+            ? ControllerManagementResponseBuilder.SuccessUnversioned(ControllerContractMapper.ToRead(snapshot))
+            : ControllerManagementResponseBuilder.NotFound;
     }
 
     private async ValueTask<ControllerManagementResponse> ReadServiceAsync(ControllerManagementRequest request, Guid serviceId, CancellationToken cancellationToken)
@@ -459,7 +487,7 @@ internal sealed class ControllerManagementCore
         if (identity.RouteId == Guid.Empty || string.IsNullOrEmpty(identity.CanonicalPath)) throw new ArgumentException("The provisioned route identity is invalid.", nameof(identity));
         if (!ownershipMarker.StartsWith(ControllerOptions.BootstrapOwnershipPrefix, StringComparison.Ordinal) || ownershipMarker.Length <= ControllerOptions.BootstrapOwnershipPrefix.Length) throw new ArgumentException("The route ownership marker is invalid.", nameof(ownershipMarker));
         var bridge = _bridge ?? throw new InvalidOperationException("The controller bridge is unavailable.");
-        if (!HasFullConfigurationScope() || !ExtensionAbi.IsCompatible(new HostApiVersion(1, 2, 0), bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
+        if (!HasFullConfigurationScope() || !ExtensionAbi.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
         var read = await bridge.FullConfiguration.ReadAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) throw new InvalidOperationException("The controller route configuration is unavailable.");
         var candidate = snapshot.Routes.SingleOrDefault(route => route.Id == identity.RouteId);
@@ -563,6 +591,7 @@ internal sealed class ControllerManagementCore
     }
 
     private static bool RequireEmptyBody(ControllerManagementRequest request) => request.Body.IsEmpty;
+    private static bool RequireNoIfMatch(ControllerManagementRequest request) => !request.Headers.ContainsKey(ControllerManagementApiContract.IfMatchHeaderName);
     private static bool HasJsonBody(ControllerManagementRequest request, bool mergePatch = false)
     {
         if (request.Body.IsEmpty || request.Body.Length > ControllerAdmissionLimits.MaximumRequestBodyBytes || !request.Headers.TryGetValue("content-type", out var values) || values.Length != 1) return false;
@@ -644,6 +673,18 @@ internal sealed class ControllerManagementCore
         var suffix = path[(prefix.Length + 1)..];
         return suffix.Length > 0 && !suffix.Contains('/', StringComparison.Ordinal) && Guid.TryParse(suffix, out id);
     }
+    private static bool TryGetServiceRuntimePath(string path, out Guid id)
+    {
+        id = default;
+        var prefix = ControllerManagementApiContract.ServicesPath + "/";
+        if (!path.StartsWith(prefix, StringComparison.Ordinal)) return false;
+        var suffix = path[prefix.Length..];
+        const string tail = "/runtime";
+        if (!suffix.EndsWith(tail, StringComparison.Ordinal)) return false;
+        var idText = suffix[..^tail.Length];
+        return idText.Length > 0 && !idText.Contains('/', StringComparison.Ordinal) && Guid.TryParse(idText, out id);
+    }
+
     private static bool TryGetEnvironmentPath(string path, out Guid id)
     {
         id = default;
@@ -683,6 +724,7 @@ internal static class ControllerManagementResponseBuilder
 {
     private static readonly KeyValuePair<string, IEnumerable<string>> JsonContentType = new("content-type", new[] { "application/json; charset=utf-8" });
     internal static ControllerManagementResponse Success(object? data, long version, int statusCode = 200, string? location = null) => Create(statusCode, ControllerDispatchCode.Success, new ControllerResponseEnvelope { Ok = true, Code = "ok", Message = "The operation completed.", Data = data, Version = version }, version, location);
+    internal static ControllerManagementResponse SuccessUnversioned(object? data) => Create(200, ControllerDispatchCode.Success, new ControllerResponseEnvelope { Ok = true, Code = "ok", Message = "The operation completed.", Data = data, Version = null });
     internal static ControllerManagementResponse NoContent(long version) => new(204, ControllerDispatchCode.Success, new[] { JsonContentType, ETag(version) });
     internal static ControllerManagementResponse Error(int statusCode, ControllerDispatchCode dispatchCode, string code, string message) => Create(statusCode, dispatchCode, new ControllerResponseEnvelope { Ok = false, Code = code, Message = message });
     private static ControllerManagementResponse Create(int statusCode, ControllerDispatchCode dispatchCode, ControllerResponseEnvelope envelope, long? version = null, string? location = null)

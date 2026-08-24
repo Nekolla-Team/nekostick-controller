@@ -27,6 +27,10 @@ public static class ControllerManagementApiContract
     public const string RoutesPath = "/v1/routes";
     /// <summary>Path for service operations.</summary>
     public const string ServicesPath = "/v1/services";
+    /// <summary>Path for Host-wide service runtime telemetry.</summary>
+    public const string ServicesRuntimePath = "/v1/services/runtime";
+    /// <summary>Template path for one service runtime telemetry snapshot.</summary>
+    public const string ServiceRuntimePath = "/v1/services/{id}/runtime";
     /// <summary>Path for extension operations.</summary>
     public const string ExtensionsPath = "/v1/extensions";
     /// <summary>HTTP header carrying a resource entity tag.</summary>
@@ -423,6 +427,61 @@ public sealed class ControllerServiceReadDto
     /// <summary>Current service version.</summary>
     [JsonPropertyName("version")] public long Version { get; init; }
 }
+/// <summary>Identifies the safe lifecycle state of a supervised service runtime.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<ControllerServiceLifecycleState>))]
+public enum ControllerServiceLifecycleState
+{
+    /// <summary>No lifecycle observation is available.</summary>
+    Unknown,
+    /// <summary>The service is disabled.</summary>
+    Disabled,
+    /// <summary>The service is starting.</summary>
+    Starting,
+    /// <summary>The service is running.</summary>
+    Running,
+    /// <summary>The service is stopping.</summary>
+    Stopping,
+    /// <summary>The service failed to start or remain healthy.</summary>
+    Failed
+}
+
+/// <summary>Identifies the safe health state of a supervised service runtime.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<ControllerServiceHealthState>))]
+public enum ControllerServiceHealthState
+{
+    /// <summary>No health observation is available.</summary>
+    Unknown,
+    /// <summary>The latest health observation succeeded.</summary>
+    Healthy,
+    /// <summary>The latest health observation failed.</summary>
+    Unhealthy
+}
+
+/// <summary>Read-only runtime telemetry for one supervised service.</summary>
+public sealed class ControllerServiceRuntimeReadDto
+{
+    /// <summary>Stable service identifier.</summary>
+    [JsonPropertyName("serviceId")] public Guid ServiceId { get; init; }
+    /// <summary>Operating-system process identifier when known.</summary>
+    [JsonPropertyName("processId")] public int? ProcessId { get; init; }
+    /// <summary>UTC start time of the current process generation when known.</summary>
+    [JsonPropertyName("startedAt")] public DateTimeOffset? StartedAt { get; init; }
+    /// <summary>Current process-generation uptime in milliseconds when representable.</summary>
+    [JsonPropertyName("uptimeMs")] public long? UptimeMs { get; init; }
+    /// <summary>Safe lifecycle state.</summary>
+    [JsonPropertyName("lifecycleState")] public ControllerServiceLifecycleState LifecycleState { get; init; }
+    /// <summary>Safe health state.</summary>
+    [JsonPropertyName("healthState")] public ControllerServiceHealthState HealthState { get; init; }
+    /// <summary>Cumulative forwarded request count.</summary>
+    [JsonPropertyName("forwardedRequestCount")] public long ForwardedRequestCount { get; init; }
+    /// <summary>Currently active forwarded request count.</summary>
+    [JsonPropertyName("activeForwardedRequestCount")] public long ActiveForwardedRequestCount { get; init; }
+    /// <summary>UTC time at which telemetry was last updated when known.</summary>
+    [JsonPropertyName("lastUpdatedAt")] public DateTimeOffset? LastUpdatedAt { get; init; }
+    /// <summary>UTC time of the latest health observation when known.</summary>
+    [JsonPropertyName("lastHealthAt")] public DateTimeOffset? LastHealthAt { get; init; }
+}
+
 
 /// <summary>Write representation for service create/patch. Environment is write-only on create.</summary>
 public sealed class ControllerServiceWriteDto
@@ -633,7 +692,7 @@ public static class ControllerManagementJson
     private sealed class ResponseTooLargeException : Exception { }
 }
 
-/// <summary>Maps Host 1.2 records to stable public read/write DTOs.</summary>
+/// <summary>Maps Host contract records to stable controller-owned DTOs.</summary>
 internal static class ControllerContractMapper
 {
 
@@ -663,6 +722,19 @@ internal static class ControllerContractMapper
         Id = source.Id, Enabled = source.Enabled, FileName = source.FileName, ArgumentList = source.ArgumentList, WorkingDirectory = source.WorkingDirectory,
         StartMode = (ControllerServiceStartMode)source.StartMode, RestartPolicy = (ControllerServiceRestartPolicy)source.RestartPolicy, HealthCheck = ToRead(source.HealthCheck),
         CreatedAt = source.CreatedAt, UpdatedAt = source.UpdatedAt, Version = source.Version
+    };
+    internal static ControllerServiceRuntimeReadDto ToRead(ExtensionServiceRuntimeSnapshot source) => new()
+    {
+        ServiceId = source.ServiceId,
+        ProcessId = source.ProcessId,
+        StartedAt = source.StartedAt,
+        UptimeMs = source.Uptime?.Ticks / TimeSpan.TicksPerMillisecond,
+        LifecycleState = (ControllerServiceLifecycleState)source.LifecycleState,
+        HealthState = (ControllerServiceHealthState)source.HealthState,
+        ForwardedRequestCount = source.ForwardedRequestCount,
+        ActiveForwardedRequestCount = source.ActiveForwardedRequestCount,
+        LastUpdatedAt = source.LastUpdatedAt,
+        LastHealthAt = source.LastHealthAt
     };
 
     internal static ControllerExtensionRecordReadDto ToRead(ExtensionRecordConfiguration source) => new()
