@@ -442,10 +442,28 @@ public interface IControllerManagementHandlerFactory
 }
 
 /// <summary>Provides the foundation dispatcher and admission checks.</summary>
-public sealed class ControllerManagementDispatcher : IControllerManagementDispatcher
+public sealed class ControllerManagementDispatcher : IControllerManagementDispatcher, IDisposable
 {
-    private readonly ControllerOptions _options;
-    private readonly ControllerManagementCore _core;
+    private sealed class DispatcherConfiguration
+    {
+        internal DispatcherConfiguration(ControllerOptions options, ControllerManagementCore core)
+        {
+            Options = options;
+            Core = core;
+        }
+
+        internal ControllerOptions Options { get; }
+        internal ControllerManagementCore Core { get; }
+    }
+
+    private readonly IExtensionHostBridge? _bridge;
+    private readonly SemaphoreSlim _mutationGate = new(1, 1);
+    private int _inFlight;
+    private readonly object _drainSync = new();
+    private TaskCompletionSource? _drain;
+    private DispatcherConfiguration _configuration;
+    private Func<long, CancellationToken, ValueTask<ControllerManagementResponse>>? _reloadHandler;
+    private Func<CancellationToken, ValueTask<ControllerStateDto?>>? _stateProvider;
     private int _state;
 
     /// <summary>Creates an admission dispatcher without a Host bridge.</summary>
@@ -458,18 +476,56 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
     internal ControllerManagementDispatcher(ControllerOptions options, IExtensionHostBridge? bridge)
     {
         ArgumentNullException.ThrowIfNull(options);
-        _options = options;
-        _core = new ControllerManagementCore(options, bridge);
+        _bridge = bridge;
+        _configuration = new DispatcherConfiguration(options, new ControllerManagementCore(options, bridge, mutationGate: _mutationGate, admissionProbe: () => IsStarted));
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        _mutationGate.Dispose();
     }
 
     /// <summary>Gets whether the dispatcher is accepting authenticated requests.</summary>
     public bool IsStarted => Volatile.Read(ref _state) == 1;
 
+    /// <summary>Configures runtime reload and fresh state callbacks.</summary>
+    internal void ConfigureRuntimeCallbacks(
+        Func<long, CancellationToken, ValueTask<ControllerManagementResponse>> reloadHandler,
+        Func<CancellationToken, ValueTask<ControllerStateDto?>> stateProvider)
+    {
+        ArgumentNullException.ThrowIfNull(reloadHandler);
+        ArgumentNullException.ThrowIfNull(stateProvider);
+        Volatile.Write(ref _reloadHandler, reloadHandler);
+        Volatile.Write(ref _stateProvider, stateProvider);
+        var current = Volatile.Read(ref _configuration);
+        Volatile.Write(ref _configuration, new DispatcherConfiguration(
+            current.Options,
+            new ControllerManagementCore(current.Options, _bridge, reloadHandler, stateProvider, _mutationGate, admissionProbe: () => IsStarted)));
+    }
+
+    /// <summary>Atomically swaps the options used by admission and core dispatch.</summary>
+    internal void SwapOptions(ControllerOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        var reloadHandler = Volatile.Read(ref _reloadHandler);
+        var stateProvider = Volatile.Read(ref _stateProvider);
+        var core = new ControllerManagementCore(options, _bridge, reloadHandler, stateProvider, _mutationGate, admissionProbe: () => IsStarted);
+        Volatile.Write(ref _configuration, new DispatcherConfiguration(options, core));
+    }
+
+    /// <summary>Gets the active dispatcher options for runtime reconciliation.</summary>
+    internal ControllerOptions Options => Volatile.Read(ref _configuration).Options;
+
+    /// <summary>Gets the shared gate serializing configuration mutations and reload.</summary>
+    internal SemaphoreSlim MutationGate => _mutationGate;
+
     /// <summary>Starts admission without binding any listener.</summary>
     internal ValueTask StartAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var validation = _options.Validate();
+        var configuration = Volatile.Read(ref _configuration);
+        var validation = configuration.Options.Validate();
         if (!validation.IsValid)
         {
             throw new InvalidOperationException("Controller options are invalid.");
@@ -488,76 +544,149 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
     }
 
     /// <inheritdoc />
-    public ValueTask<ControllerManagementResponse> DispatchAsync(
+    public async ValueTask<ControllerManagementResponse> DispatchAsync(
         ControllerManagementRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (!IsStarted)
+        Interlocked.Increment(ref _inFlight);
+        try
         {
-            return ValueTask.FromResult(ControllerManagementResponseBuilder.Unavailable);
-        }
+            // Increment-before-state-read pairs with QuiesceAsync's state-write-before-count-read:
+            // a dispatch the drain could miss is guaranteed to observe closed admission first.
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsStarted)
+            {
+                return ControllerManagementResponseBuilder.Unavailable;
+            }
 
-        if (!_options.IsTransportEnabled(request.Transport))
+            var configuration = Volatile.Read(ref _configuration);
+            var options = configuration.Options;
+            if (!options.IsTransportEnabled(request.Transport))
+            {
+                return ControllerManagementResponseBuilder.TransportDisabled;
+            }
+
+            if (!options.IsApiKeyValid(request.ApiKey) ||
+                !request.Headers.TryGetValue(ControllerManagementApiContract.ApiKeyHeaderName, out var keyValues) ||
+                keyValues.Length != 1 ||
+                !options.IsApiKeyValid(keyValues[0]) ||
+                !string.Equals(request.ApiKey, keyValues[0], StringComparison.Ordinal))
+            {
+                return ControllerManagementResponseBuilder.Unauthorized;
+            }
+
+            return await configuration.Core.DispatchAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        finally
         {
-            return ValueTask.FromResult(ControllerManagementResponseBuilder.TransportDisabled);
+            EndDispatch();
         }
-
-        if (!_options.IsApiKeyValid(request.ApiKey) ||
-            !request.Headers.TryGetValue(ControllerManagementApiContract.ApiKeyHeaderName, out var keyValues) ||
-            keyValues.Length != 1 ||
-            !_options.IsApiKeyValid(keyValues[0]) ||
-            !string.Equals(request.ApiKey, keyValues[0], StringComparison.Ordinal))
-        {
-            return ValueTask.FromResult(ControllerManagementResponseBuilder.Unauthorized);
-        }
-
-        return _core.DispatchAsync(request, cancellationToken);
     }
+    private void EndDispatch()
+    {
+        if (Interlocked.Decrement(ref _inFlight) == 0)
+        {
+            lock (_drainSync)
+            {
+                _drain?.TrySetResult();
+                _drain = null;
+            }
+        }
+    }
+
+    /// <summary>Waits for all admitted dispatches to finish after admission is closed.</summary>
+    internal ValueTask QuiesceAsync()
+    {
+        lock (_drainSync)
+        {
+            if (Volatile.Read(ref _inFlight) == 0)
+            {
+                return ValueTask.CompletedTask;
+            }
+
+            _drain ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            return new ValueTask(_drain.Task);
+        }
+    }
+
     internal ValueTask ProvisionHostRouteAsync(
         string handlerId,
         CancellationToken cancellationToken) =>
-        _core.ProvisionHostRouteAsync(handlerId, cancellationToken);
+        Volatile.Read(ref _configuration).Core.ProvisionHostRouteAsync(handlerId, cancellationToken);
+
+    /// <summary>Provisions a HostRoute using candidate options before an atomic options swap.</summary>
+    internal ValueTask<ProvisionedHostRouteIdentity?> ProvisionHostRouteAsync(
+        string handlerId,
+        ControllerOptions options,
+        string? ownershipMarker,
+        CancellationToken cancellationToken) =>
+        Volatile.Read(ref _configuration).Core.ProvisionHostRouteAsync(handlerId, options, ownershipMarker, cancellationToken);
 
     /// <summary>Provisions an ephemeral private route with an internal ownership marker.</summary>
     internal ValueTask<ProvisionedHostRouteIdentity?> ProvisionHostRouteAsync(
         string handlerId,
         string? ownershipMarker,
         CancellationToken cancellationToken) =>
-        _core.ProvisionHostRouteAsync(handlerId, ownershipMarker, cancellationToken);
+        Volatile.Read(ref _configuration).Core.ProvisionHostRouteAsync(handlerId, ownershipMarker, cancellationToken);
+
+    /// <summary>Atomically replaces a verified bootstrap route with a configured route.</summary>
+    internal ValueTask ReplaceBootstrapWithConfiguredHostRouteAsync(
+        string handlerId,
+        ProvisionedHostRouteIdentity identity,
+        string ownershipMarker,
+        ControllerOptions options,
+        CancellationToken cancellationToken) =>
+        Volatile.Read(ref _configuration).Core.ReplaceBootstrapWithConfiguredHostRouteAsync(handlerId, identity, ownershipMarker, options, cancellationToken);
+
+    /// <summary>Atomically ensures a configured route at its desired path.</summary>
+    internal ValueTask EnsureConfiguredHostRouteAsync(
+        string handlerId,
+        string? oldCanonicalPath,
+        ControllerOptions options,
+        CancellationToken cancellationToken) =>
+        Volatile.Read(ref _configuration).Core.EnsureConfiguredHostRouteAsync(handlerId, oldCanonicalPath, options, cancellationToken);
+
+    /// <summary>Removes only the exact configured controller route identity.</summary>
+    internal ValueTask RemoveConfiguredHostRouteAsync(
+        string handlerId,
+        string canonicalPath,
+        CancellationToken cancellationToken) =>
+        Volatile.Read(ref _configuration).Core.RemoveConfiguredHostRouteAsync(handlerId, canonicalPath, cancellationToken);
+
     /// <summary>Removes only an identity- and marker-proven private bootstrap route.</summary>
     internal ValueTask RemoveProvisionedHostRouteAsync(
         string handlerId,
         ProvisionedHostRouteIdentity identity,
         string ownershipMarker,
         CancellationToken cancellationToken) =>
-        _core.RemoveProvisionedHostRouteAsync(handlerId, identity, ownershipMarker, cancellationToken);
+        Volatile.Read(ref _configuration).Core.RemoveProvisionedHostRouteAsync(handlerId, identity, ownershipMarker, cancellationToken);
 
     /// <summary>Removes only stale private bootstrap routes for this controller handler.</summary>
     internal ValueTask CleanupStaleBootstrapRoutesAsync(string handlerId, CancellationToken cancellationToken) =>
-        _core.CleanupStaleBootstrapRoutesAsync(handlerId, cancellationToken);
+        Volatile.Read(ref _configuration).Core.CleanupStaleBootstrapRoutesAsync(handlerId, cancellationToken);
 
 }
 
 /// <summary>Coordinates dispatcher, listeners, and the optional HostRoute lifecycle.</summary>
 internal sealed class ControllerRuntime
 {
-    private readonly ControllerOptions _options;
-    private readonly IReadOnlyList<IControllerTransportAdapter> _transportAdapters;
+    private ControllerOptions _options;
+    private readonly List<IControllerTransportAdapter> _transportAdapters;
+    private readonly IExtensionHostBridge? _bridge;
     private ProvisionedHostRouteIdentity? _bootstrapRouteIdentity;
-    private readonly string? _bootstrapOwnershipMarker;
+    private string? _bootstrapOwnershipMarker;
     private bool _staleBootstrapRoutesCleaned;
     private bool _bootstrapRouteCleanupPending;
     private bool _bootstrapRouteProvisioned;
+    private bool _hostRouteRunning;
     private readonly List<IControllerTransportAdapter> _startedAdapters = new();
     private IExtensionRegistration? _registration;
     private string? _handlerId;
     private int _state;
 
     internal ControllerRuntime(ControllerManagementDispatcher dispatcher, ControllerOptions options)
-        : this(dispatcher, options, null, null)
+        : this(dispatcher, options, null, null, null)
     {
     }
 
@@ -565,7 +694,8 @@ internal sealed class ControllerRuntime
         ControllerManagementDispatcher dispatcher,
         ControllerOptions options,
         IEnumerable<IControllerTransportAdapter>? transportAdapters,
-        string? bootstrapOwnershipMarker = null)
+        string? bootstrapOwnershipMarker = null,
+        IExtensionHostBridge? bridge = null)
     {
         ArgumentNullException.ThrowIfNull(dispatcher);
         ArgumentNullException.ThrowIfNull(options);
@@ -576,8 +706,9 @@ internal sealed class ControllerRuntime
 
         Dispatcher = dispatcher;
         _options = options;
+        _bridge = bridge;
         _bootstrapOwnershipMarker = bootstrapOwnershipMarker;
-        _transportAdapters = (transportAdapters ?? CreateDefaultTransportAdapters()).ToArray();
+        _transportAdapters = (transportAdapters ?? CreateDefaultTransportAdapters()).ToList();
         if (_transportAdapters.Any(static adapter => adapter is null))
         {
             throw new ArgumentException("The transport adapter collection contains a null adapter.", nameof(transportAdapters));
@@ -600,6 +731,77 @@ internal sealed class ControllerRuntime
     /// <summary>Gets whether listeners or dispatcher admission still require cleanup.</summary>
     internal bool HasActiveResources =>
         IsStarted || _startedAdapters.Count != 0 || Dispatcher.IsStarted || _bootstrapRouteCleanupPending;
+
+    /// <summary>Returns a non-secret snapshot for the controller state endpoint.</summary>
+    internal ControllerStateDto GetState() => BuildState(Dispatcher.Options, _hostRouteRunning);
+
+    /// <summary>Reads current HostRoute ownership before returning non-secret runtime state.</summary>
+    internal async ValueTask<ControllerStateDto?> GetStateAsync(CancellationToken cancellationToken)
+    {
+        if (_bridge is null)
+        {
+            return GetState();
+        }
+
+        ConfigurationReadResult<HostConfigurationSnapshot> read;
+        try
+        {
+            read = await _bridge.FullConfiguration.ReadAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+        catch (NotSupportedException)
+        {
+            return null;
+        }
+
+        if (!read.IsSuccess || read.Value is not { } snapshot)
+        {
+            return null;
+        }
+
+        var options = Dispatcher.Options;
+        var hostRouteRunning = false;
+        if (IsEphemeralBootstrap)
+        {
+            if (_bootstrapRouteIdentity is { } identity && _bootstrapOwnershipMarker is { } marker)
+            {
+                var route = snapshot.Routes.SingleOrDefault(candidate => candidate.Id == identity.RouteId);
+                hostRouteRunning = route is not null && ControllerManagementCore.IsBootstrapRoute(route, identity, _handlerId ?? ControllerManagementApiContract.HandlerId, marker);
+            }
+        }
+        else if (options.EnableHostRoute && _handlerId is { } handlerId && options.HostRoutePath is { } path)
+        {
+            hostRouteRunning = snapshot.Routes.Any(route =>
+                route.Target is ExtensionHandlerRouteTargetConfiguration target &&
+                string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal) &&
+                route.Matcher.Type == RouteMatcherType.Prefix &&
+                string.Equals(route.Matcher.Pattern, path, StringComparison.Ordinal));
+        }
+
+        return BuildState(options, hostRouteRunning);
+    }
+
+    private ControllerStateDto BuildState(ControllerOptions options, bool hostRouteRunning) => new()
+    {
+        BootstrapMode = IsEphemeralBootstrap,
+        Listeners = new ControllerListenersStateDto
+        {
+            HostRoute = new ControllerListenerStateDto { Enabled = options.EnableHostRoute, Running = hostRouteRunning },
+            HttpJson = new ControllerListenerStateDto { Enabled = options.EnableHttpJson, Running = IsAdapterStarted(ControllerTransport.HttpJson) },
+            Grpc = new ControllerListenerStateDto { Enabled = options.EnableGrpc, Running = IsAdapterStarted(ControllerTransport.Grpc) },
+            UnixSocket = new ControllerListenerStateDto { Enabled = options.EnableUnixSocket, Running = IsAdapterStarted(ControllerTransport.UnixSocket) }
+        }
+    };
+
+    private bool IsAdapterStarted(ControllerTransport transport) =>
+        _transportAdapters.Any(adapter => adapter.Transport == transport && adapter.IsStarted);
 
 
     internal async ValueTask StartAsync(
@@ -675,12 +877,14 @@ internal sealed class ControllerRuntime
 
                         _bootstrapRouteIdentity = identity;
                         _bootstrapRouteProvisioned = true;
+                        _hostRouteRunning = true;
 
                     }
                     else
                     {
                         await Dispatcher.ProvisionHostRouteAsync(_handlerId!, cancellationToken)
                             .ConfigureAwait(false);
+                        _hostRouteRunning = true;
                     }
                 }
                 else
@@ -732,11 +936,13 @@ internal sealed class ControllerRuntime
 
                         _bootstrapRouteIdentity = identity;
                         _bootstrapRouteProvisioned = true;
+                        _hostRouteRunning = true;
                     }
                     else
                     {
                         await Dispatcher.ProvisionHostRouteAsync(handler.HandlerId, cancellationToken)
                             .ConfigureAwait(false);
+                        _hostRouteRunning = true;
                     }
                 }
             }
@@ -752,6 +958,384 @@ internal sealed class ControllerRuntime
         }
     }
 
+    /// <summary>Reloads validated Host settings and reconciles listeners before swapping admission options.</summary>
+    internal async ValueTask<ControllerManagementResponse> ReloadAsync(
+        long expectedVersion,
+        CancellationToken cancellationToken)
+    {
+        if (!IsStarted || _bridge is null)
+        {
+            return ControllerManagementResponseBuilder.Unavailable;
+        }
+
+        await Dispatcher.MutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await ReloadCoreAsync(expectedVersion, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            Dispatcher.MutationGate.Release();
+        }
+    }
+
+    private async ValueTask<ControllerManagementResponse> ReloadCoreAsync(
+        long expectedVersion,
+        CancellationToken cancellationToken)
+    {
+        if (!IsStarted || _bridge is null)
+        {
+            return ControllerManagementResponseBuilder.Unavailable;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        ConfigurationReadResult<HostConfigurationSnapshot> read;
+        try
+        {
+            read = await _bridge.FullConfiguration.ReadAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (InvalidOperationException)
+        {
+            return ControllerManagementResponseBuilder.Unavailable;
+        }
+        catch (NotSupportedException)
+        {
+            return ControllerManagementResponseBuilder.Unsupported;
+        }
+
+        if (!read.IsSuccess || read.Value is not { } snapshot)
+        {
+            return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
+        }
+
+        if (expectedVersion != snapshot.Version)
+        {
+            return ControllerManagementResponseBuilder.PreconditionFailed;
+        }
+
+        var matchingSettings = snapshot.ExtensionSettings
+            .Where(static settings => string.Equals(settings.ExtensionId, ControllerOptions.ExtensionId, StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+        if (matchingSettings.Length != 1 || !ControllerOptions.TryParseHostSettings(matchingSettings[0], out var candidate) || candidate is null)
+        {
+            return ControllerManagementResponseBuilder.InvalidRequest;
+        }
+
+        var validation = candidate.Validate();
+        if (!validation.IsValid)
+        {
+            return ControllerManagementResponseBuilder.InvalidRequest;
+        }
+
+        if (IsEphemeralBootstrap && !HasAnyListener(candidate))
+        {
+            return ControllerManagementResponseBuilder.InvalidRequest;
+        }
+        var current = Volatile.Read(ref _options);
+        var optionsSwapped = false;
+        try
+        {
+            await ReconcileAdaptersAsync(current, candidate, cancellationToken).ConfigureAwait(false);
+            await ReconcileHostRouteAsync(current, candidate, snapshot, cancellationToken).ConfigureAwait(false);
+
+            // All listener and private-route changes completed successfully while admission was
+            // stopped. Publish one immutable dispatcher configuration only after that point.
+            Dispatcher.SwapOptions(candidate);
+            optionsSwapped = true;
+            Volatile.Write(ref _options, candidate);
+            await Dispatcher.StartAsync(CancellationToken.None).ConfigureAwait(false);
+            Interlocked.Exchange(ref _state, 1);
+            return ControllerManagementResponseBuilder.Success(GetState(), snapshot.Version);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            if (optionsSwapped)
+            {
+                Volatile.Write(ref _options, current);
+                Dispatcher.SwapOptions(current);
+            }
+
+            if (!await RecoverAfterReloadFailureAsync(candidate, current).ConfigureAwait(false))
+            {
+                await FailClosedAsync().ConfigureAwait(false);
+            }
+
+            throw;
+        }
+        catch
+        {
+            if (optionsSwapped)
+            {
+                Volatile.Write(ref _options, current);
+                Dispatcher.SwapOptions(current);
+            }
+
+            if (!await RecoverAfterReloadFailureAsync(candidate, current).ConfigureAwait(false))
+            {
+                await FailClosedAsync().ConfigureAwait(false);
+            }
+
+            return ControllerManagementResponseBuilder.Unavailable;
+        }
+    }
+
+    private async ValueTask<bool> RecoverAfterReloadFailureAsync(
+        ControllerOptions candidate,
+        ControllerOptions current)
+    {
+        try
+        {
+            await ReconcileAdaptersAsync(candidate, current, CancellationToken.None).ConfigureAwait(false);
+            await Dispatcher.StartAsync(CancellationToken.None).ConfigureAwait(false);
+            Interlocked.Exchange(ref _state, 1);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private async ValueTask ReconcileAdaptersAsync(
+        ControllerOptions current,
+        ControllerOptions candidate,
+        CancellationToken cancellationToken)
+    {
+        await Dispatcher.StopAsync(CancellationToken.None).ConfigureAwait(false);
+
+        for (var index = 0; index < _transportAdapters.Count; index++)
+        {
+            var adapter = _transportAdapters[index];
+            var wasEnabled = current.IsTransportEnabled(adapter.Transport);
+            var willBeEnabled = candidate.IsTransportEnabled(adapter.Transport);
+            var endpointChanged = wasEnabled && willBeEnabled && !HasSameEndpoint(current, candidate, adapter.Transport);
+            if (!wasEnabled || (!endpointChanged && willBeEnabled))
+            {
+                continue;
+            }
+
+            await StopAdapterAsync(adapter, cancellationToken).ConfigureAwait(false);
+            if (endpointChanged)
+            {
+                var replacement = CreateReplacementAdapter(adapter);
+                _transportAdapters[index] = replacement;
+                if (adapter is IDisposable disposable)
+                {
+                    disposable.Dispose();
+                }
+            }
+        }
+
+        foreach (var adapter in _transportAdapters)
+        {
+            if (!candidate.IsTransportEnabled(adapter.Transport) || adapter.IsStarted)
+            {
+                continue;
+            }
+
+            await adapter.StartAsync(Dispatcher, candidate, cancellationToken).ConfigureAwait(false);
+            if (!adapter.IsStarted)
+            {
+                throw new InvalidOperationException("The enabled transport did not start during reload.");
+            }
+
+            if (!_startedAdapters.Contains(adapter))
+            {
+                _startedAdapters.Add(adapter);
+            }
+        }
+    }
+
+    private async ValueTask ReconcileHostRouteAsync(
+        ControllerOptions current,
+        ControllerOptions candidate,
+        HostConfigurationSnapshot snapshot,
+        CancellationToken cancellationToken)
+    {
+        if (!current.EnableHostRoute && !candidate.EnableHostRoute && !IsEphemeralBootstrap)
+        {
+            _hostRouteRunning = false;
+            return;
+        }
+
+        if (_handlerId is null)
+        {
+            throw new InvalidOperationException("The controller HostRoute handler identity is unavailable.");
+        }
+
+        if (IsEphemeralBootstrap)
+        {
+            if (_bootstrapRouteIdentity is not { } identity || _bootstrapOwnershipMarker is not { } marker)
+            {
+                throw new InvalidOperationException("The bootstrap route ownership proof is unavailable.");
+            }
+
+            var bootstrapRoute = snapshot.Routes.SingleOrDefault(route => route.Id == identity.RouteId);
+            var bootstrapPresent = bootstrapRoute is not null && ControllerManagementCore.IsBootstrapRoute(bootstrapRoute, identity, _handlerId, marker);
+            if (bootstrapRoute is not null && !bootstrapPresent)
+            {
+                throw new InvalidOperationException("The bootstrap route ownership proof no longer matches.");
+            }
+
+            if (candidate.EnableHostRoute)
+            {
+                await Dispatcher.ReplaceBootstrapWithConfiguredHostRouteAsync(
+                    _handlerId,
+                    identity,
+                    marker,
+                    candidate,
+                    cancellationToken).ConfigureAwait(false);
+                _bootstrapRouteIdentity = null;
+                _bootstrapRouteProvisioned = false;
+                _bootstrapRouteCleanupPending = false;
+                _bootstrapOwnershipMarker = null;
+                _hostRouteRunning = true;
+            }
+            else
+            {
+                await Dispatcher.RemoveProvisionedHostRouteAsync(
+                    _handlerId,
+                    identity,
+                    marker,
+                    cancellationToken).ConfigureAwait(false);
+                _bootstrapRouteIdentity = null;
+                _bootstrapRouteProvisioned = false;
+                _bootstrapRouteCleanupPending = false;
+                _bootstrapOwnershipMarker = null;
+                _hostRouteRunning = false;
+            }
+
+            return;
+        }
+
+        var currentPath = current.HostRoutePath;
+        var verifiedCurrent = current.EnableHostRoute && currentPath is not null && snapshot.Routes.Any(route =>
+            route.Target is ExtensionHandlerRouteTargetConfiguration target &&
+            string.Equals(target.HandlerId, _handlerId, StringComparison.Ordinal) &&
+            route.Matcher.Type == RouteMatcherType.Prefix &&
+            string.Equals(route.Matcher.Pattern, currentPath, StringComparison.Ordinal));
+        var pathChanged = !string.Equals(currentPath, candidate.HostRoutePath, StringComparison.Ordinal);
+        if (candidate.EnableHostRoute && (!current.EnableHostRoute || !verifiedCurrent || pathChanged))
+        {
+            await Dispatcher.EnsureConfiguredHostRouteAsync(
+                _handlerId,
+                current.EnableHostRoute ? currentPath : null,
+                candidate,
+                cancellationToken).ConfigureAwait(false);
+            _hostRouteRunning = true;
+        }
+        else if (!candidate.EnableHostRoute && verifiedCurrent)
+        {
+            await Dispatcher.RemoveConfiguredHostRouteAsync(
+                _handlerId,
+                currentPath!,
+                cancellationToken).ConfigureAwait(false);
+            _hostRouteRunning = false;
+        }
+        else
+        {
+            _hostRouteRunning = candidate.EnableHostRoute && verifiedCurrent;
+        }
+    }
+
+    private async ValueTask StopAdapterAsync(
+        IControllerTransportAdapter adapter,
+        CancellationToken cancellationToken)
+    {
+        if (adapter.IsStarted)
+        {
+            await adapter.StopAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        _startedAdapters.Remove(adapter);
+        if (adapter.IsStarted)
+        {
+            throw new InvalidOperationException("The transport did not stop during reload.");
+        }
+    }
+
+    private static bool HasAnyListener(ControllerOptions options) =>
+        options.EnableHostRoute || options.EnableHttpJson || options.EnableGrpc || options.EnableUnixSocket;
+
+    private static bool HasSameEndpoint(ControllerOptions left, ControllerOptions right, ControllerTransport transport) => transport switch
+    {
+        ControllerTransport.HostRoute => left.EnableHostRoute == right.EnableHostRoute && string.Equals(left.HostRoutePath, right.HostRoutePath, StringComparison.Ordinal),
+        ControllerTransport.HttpJson => left.EnableHttpJson == right.EnableHttpJson && left.HttpPort == right.HttpPort,
+        ControllerTransport.Grpc => left.EnableGrpc == right.EnableGrpc && left.GrpcPort == right.GrpcPort,
+        ControllerTransport.UnixSocket => left.EnableUnixSocket == right.EnableUnixSocket && left.UnixSocketMode == right.UnixSocketMode && string.Equals(left.UnixSocketPath, right.UnixSocketPath, StringComparison.Ordinal),
+        _ => false
+    };
+
+    private static IControllerTransportAdapter CreateReplacementAdapter(IControllerTransportAdapter adapter) => adapter.Transport switch
+    {
+        ControllerTransport.HttpJson => new HttpJsonTransportAdapter(),
+        ControllerTransport.Grpc => new GrpcControllerManagementAdapter(),
+        ControllerTransport.UnixSocket => new UnixSocketTransportAdapter(),
+        _ => throw new InvalidOperationException("The transport adapter cannot be replaced safely.")
+    };
+
+    private async ValueTask FailClosedAsync()
+    {
+        _hostRouteRunning = false;
+        try
+        {
+            await StopAllAdaptersAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            // Continue to close dispatcher admission even when one adapter retains a resource.
+        }
+
+        try
+        {
+            await Dispatcher.StopAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+            // The dispatcher is already fail-closed when this operation cannot complete.
+        }
+
+        Interlocked.Exchange(ref _state, 0);
+    }
+
+    private async ValueTask StopAllAdaptersAsync()
+    {
+        Exception? firstFailure = null;
+        for (var index = _transportAdapters.Count - 1; index >= 0; index--)
+        {
+            var adapter = _transportAdapters[index];
+            if (!adapter.IsStarted)
+            {
+                _startedAdapters.Remove(adapter);
+                continue;
+            }
+
+            try
+            {
+                await adapter.StopAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                firstFailure ??= exception;
+            }
+
+            if (!adapter.IsStarted)
+            {
+                _startedAdapters.Remove(adapter);
+            }
+        }
+
+        if (firstFailure is not null)
+        {
+            throw firstFailure;
+        }
+    }
+
     internal ValueTask StopAsync(CancellationToken cancellationToken) =>
         StopAsync(unregisterHandler: true, cancellationToken: cancellationToken);
 
@@ -764,6 +1348,9 @@ internal sealed class ControllerRuntime
         var state = Volatile.Read(ref _state);
         if (state == 0 && (!unregisterHandler || !HasRegisteredHandler))
         {
+            // A runtime closed by fail-closed reload recovery can still have admitted dispatches
+            // draining; terminal disposal requires their leases to complete first.
+            await Dispatcher.QuiesceAsync().ConfigureAwait(false);
             return;
         }
 
@@ -779,6 +1366,7 @@ internal sealed class ControllerRuntime
 
         try
         {
+            _hostRouteRunning = false;
             await StopStartedAdaptersAsync(cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             await RemoveBootstrapRouteAsync(CancellationToken.None).ConfigureAwait(false);
@@ -790,6 +1378,7 @@ internal sealed class ControllerRuntime
             // The cancellation check above makes terminal cleanup deterministic; no resource
             // remains that should be left live once the handler has been tombstoned.
             await Dispatcher.StopAsync(CancellationToken.None).ConfigureAwait(false);
+            await Dispatcher.QuiesceAsync().ConfigureAwait(false);
             Interlocked.Exchange(ref _state, 0);
         }
         catch
@@ -825,6 +1414,9 @@ internal sealed class ControllerRuntime
         {
             adapter.Dispose();
         }
+
+        // Terminal runtimes never dispatch again, so the shared mutation gate can be released.
+        Dispatcher.Dispose();
     }
 
     private async ValueTask<bool> RollbackStartupAsync()
@@ -858,6 +1450,7 @@ internal sealed class ControllerRuntime
         {
             // Preserve the original startup failure; the dispatcher stop is best effort here.
         }
+        await Dispatcher.QuiesceAsync().ConfigureAwait(false);
 
         return _startedAdapters.Count == 0 &&
             !Dispatcher.IsStarted &&
@@ -889,6 +1482,7 @@ internal sealed class ControllerRuntime
         _bootstrapRouteIdentity = null;
         _bootstrapRouteProvisioned = false;
         _bootstrapRouteCleanupPending = false;
+        _hostRouteRunning = false;
     }
 
     private async ValueTask StopStartedAdaptersAsync(CancellationToken cancellationToken)

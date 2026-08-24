@@ -33,6 +33,10 @@ public static class ControllerManagementApiContract
     public const string ServiceRuntimePath = "/v1/services/{id}/runtime";
     /// <summary>Path for extension operations.</summary>
     public const string ExtensionsPath = "/v1/extensions";
+    /// <summary>Path for unversioned controller runtime state.</summary>
+    public const string StatePath = "/v1/controller/state";
+    /// <summary>Path for hot controller settings reload.</summary>
+    public const string ReloadSettingsPath = "/v1/controller/reload-settings";
     /// <summary>HTTP header carrying a resource entity tag.</summary>
     public const string ETagHeaderName = "etag";
     /// <summary>HTTP header used to supply the entity tag required for a conditional update.</summary>
@@ -161,6 +165,37 @@ public enum ControllerExtensionLoadState
     Failed,
     /// <summary>The extension is being unloaded.</summary>
     Unloading
+}
+
+/// <summary>Describes whether one controller listener is configured and accepting requests.</summary>
+public sealed class ControllerListenerStateDto
+{
+    /// <summary>Gets whether the listener is enabled by the active controller options.</summary>
+    [JsonPropertyName("enabled")] public bool Enabled { get; init; }
+    /// <summary>Gets whether the listener is currently accepting requests.</summary>
+    [JsonPropertyName("running")] public bool Running { get; init; }
+}
+
+/// <summary>Contains the safe runtime state of all controller listeners.</summary>
+public sealed class ControllerListenersStateDto
+{
+    /// <summary>Gets the HostRoute listener state.</summary>
+    [JsonPropertyName("hostRoute")] public ControllerListenerStateDto HostRoute { get; init; } = new();
+    /// <summary>Gets the HTTP/JSON listener state.</summary>
+    [JsonPropertyName("httpJson")] public ControllerListenerStateDto HttpJson { get; init; } = new();
+    /// <summary>Gets the gRPC listener state.</summary>
+    [JsonPropertyName("grpc")] public ControllerListenerStateDto Grpc { get; init; } = new();
+    /// <summary>Gets the Unix-socket listener state.</summary>
+    [JsonPropertyName("unixSocket")] public ControllerListenerStateDto UnixSocket { get; init; } = new();
+}
+
+/// <summary>Contains unversioned, non-secret controller runtime state.</summary>
+public sealed class ControllerStateDto
+{
+    /// <summary>Gets whether the controller is using its ephemeral bootstrap route.</summary>
+    [JsonPropertyName("bootstrapMode")] public bool BootstrapMode { get; init; }
+    /// <summary>Gets the safe state of each controller listener.</summary>
+    [JsonPropertyName("listeners")] public ControllerListenersStateDto Listeners { get; init; } = new();
 }
 
 /// <summary>Contains the stable transport response envelope.</summary>

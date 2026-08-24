@@ -16,14 +16,27 @@ internal sealed class ControllerManagementCore
 {
     private readonly ControllerOptions _options;
     private readonly IExtensionHostBridge? _bridge;
+    private readonly Func<long, CancellationToken, ValueTask<ControllerManagementResponse>>? _reloadHandler;
+    private readonly Func<CancellationToken, ValueTask<ControllerStateDto?>>? _stateProvider;
+    private readonly SemaphoreSlim? _mutationGate;
+    private readonly Func<bool>? _admissionProbe;
     private static readonly SearchValues<char> InvalidPathCharacters = SearchValues.Create("?#\0");
-
-    internal ControllerManagementCore(ControllerOptions options, IExtensionHostBridge? bridge)
+    internal ControllerManagementCore(
+        ControllerOptions options,
+        IExtensionHostBridge? bridge,
+        Func<long, CancellationToken, ValueTask<ControllerManagementResponse>>? reloadHandler = null,
+        Func<CancellationToken, ValueTask<ControllerStateDto?>>? stateProvider = null,
+        SemaphoreSlim? mutationGate = null,
+        Func<bool>? admissionProbe = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _bridge = bridge;
+        _reloadHandler = reloadHandler;
+        _stateProvider = stateProvider;
+        _mutationGate = mutationGate;
+        _admissionProbe = admissionProbe;
     }
-
+    
     internal async ValueTask<ControllerManagementResponse> DispatchAsync(ControllerManagementRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -37,74 +50,27 @@ internal sealed class ControllerManagementCore
 
         try
         {
-            if (path == ControllerManagementApiContract.RootPath)
-                return method == "GET" ? await ReadRootAsync(request, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
-            if (path == ControllerManagementApiContract.GlobalSettingsPath)
-                return method switch
-                {
-                    "GET" => await ReadGlobalSettingsAsync(request, cancellationToken).ConfigureAwait(false),
-                    "PATCH" => await PatchGlobalSettingsAsync(request, cancellationToken).ConfigureAwait(false),
-                    _ => ControllerManagementResponseBuilder.MethodNotAllowed
-                };
-            if (path == ControllerManagementApiContract.RoutesPath)
-                return method switch
-                {
-                    "GET" => await ReadRoutesAsync(request, cancellationToken).ConfigureAwait(false),
-                    "POST" => await CreateRouteAsync(request, cancellationToken).ConfigureAwait(false),
-                    _ => ControllerManagementResponseBuilder.MethodNotAllowed
-                };
-            if (path == ControllerManagementApiContract.ServicesRuntimePath)
-                return method == "GET" ? await ReadServiceRuntimesAsync(request, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
+            if (string.Equals(method, "GET", StringComparison.Ordinal) ||
+                string.Equals(path, ControllerManagementApiContract.ReloadSettingsPath, StringComparison.Ordinal) ||
+                _mutationGate is null)
+            {
+                return await RouteAsync(path, method, request, cancellationToken).ConfigureAwait(false);
+            }
 
-            if (path == ControllerManagementApiContract.ServicesPath)
-                return method switch
+            await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                if (_admissionProbe is not null && !_admissionProbe())
                 {
-                    "GET" => await ReadServicesAsync(request, cancellationToken).ConfigureAwait(false),
-                    "POST" => await CreateServiceAsync(request, cancellationToken).ConfigureAwait(false),
-                    _ => ControllerManagementResponseBuilder.MethodNotAllowed
-                };
-            if (path == ControllerManagementApiContract.ExtensionsPath)
-                return method == "GET" ? await ReadExtensionsAsync(request, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
+                    return ControllerManagementResponseBuilder.Unavailable;
+                }
 
-            if (TryGetEnvironmentPath(path, out var environmentServiceId))
-                return method switch
-                {
-                    "GET" => await ReadEnvironmentAsync(request, environmentServiceId, cancellationToken).ConfigureAwait(false),
-                    "PUT" => await PutEnvironmentAsync(request, environmentServiceId, cancellationToken).ConfigureAwait(false),
-                    "DELETE" => await DeleteEnvironmentAsync(request, environmentServiceId, cancellationToken).ConfigureAwait(false),
-                    _ => ControllerManagementResponseBuilder.MethodNotAllowed
-                };
-            if (TryGetSettingsPath(path, out var settingsExtensionId))
-                return method switch
-                {
-                    "GET" => await ReadExtensionSettingsAsync(request, settingsExtensionId, cancellationToken).ConfigureAwait(false),
-                    "PUT" => await PutExtensionSettingsAsync(request, settingsExtensionId, cancellationToken).ConfigureAwait(false),
-                    "DELETE" => await DeleteExtensionSettingsAsync(request, settingsExtensionId, cancellationToken).ConfigureAwait(false),
-                    _ => ControllerManagementResponseBuilder.MethodNotAllowed
-                };
-            if (TryGetMemberPath(path, ControllerManagementApiContract.RoutesPath, out var routeId))
-                return method switch
-                {
-                    "GET" => await ReadRouteAsync(request, routeId, cancellationToken).ConfigureAwait(false),
-                    "PATCH" => await PatchRouteAsync(request, routeId, cancellationToken).ConfigureAwait(false),
-                    "DELETE" => await DeleteRouteAsync(request, routeId, cancellationToken).ConfigureAwait(false),
-                    _ => ControllerManagementResponseBuilder.MethodNotAllowed
-                };
-            if (TryGetServiceRuntimePath(path, out var runtimeServiceId))
-                return method == "GET" ? await ReadServiceRuntimeAsync(request, runtimeServiceId, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
-
-            if (TryGetMemberPath(path, ControllerManagementApiContract.ServicesPath, out var serviceId))
-                return method switch
-                {
-                    "GET" => await ReadServiceAsync(request, serviceId, cancellationToken).ConfigureAwait(false),
-                    "PATCH" => await PatchServiceAsync(request, serviceId, cancellationToken).ConfigureAwait(false),
-                    "DELETE" => await DeleteServiceAsync(request, serviceId, cancellationToken).ConfigureAwait(false),
-                    _ => ControllerManagementResponseBuilder.MethodNotAllowed
-                };
-            if (TryGetExtensionMemberPath(path, out var extensionId))
-                return method == "GET" ? await ReadExtensionAsync(request, extensionId, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
-
-            return ControllerManagementResponseBuilder.NotFound;
+                return await RouteAsync(path, method, request, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _mutationGate.Release();
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -128,21 +94,112 @@ internal sealed class ControllerManagementCore
         }
     }
 
+    private async ValueTask<ControllerManagementResponse> RouteAsync(
+        string path,
+        string method,
+        ControllerManagementRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (path == ControllerManagementApiContract.StatePath)
+            return method == "GET" ? await ReadStateAsync(request, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
+        if (path == ControllerManagementApiContract.ReloadSettingsPath)
+            return method == "POST" ? await ReloadSettingsAsync(request, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
+        if (path == ControllerManagementApiContract.RootPath)
+            return method == "GET" ? await ReadRootAsync(request, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
+        if (path == ControllerManagementApiContract.GlobalSettingsPath)
+            return method switch
+            {
+                "GET" => await ReadGlobalSettingsAsync(request, cancellationToken).ConfigureAwait(false),
+                "PATCH" => await PatchGlobalSettingsAsync(request, cancellationToken).ConfigureAwait(false),
+                _ => ControllerManagementResponseBuilder.MethodNotAllowed
+            };
+        if (path == ControllerManagementApiContract.RoutesPath)
+            return method switch
+            {
+                "GET" => await ReadRoutesAsync(request, cancellationToken).ConfigureAwait(false),
+                "POST" => await CreateRouteAsync(request, cancellationToken).ConfigureAwait(false),
+                _ => ControllerManagementResponseBuilder.MethodNotAllowed
+            };
+        if (path == ControllerManagementApiContract.ServicesRuntimePath)
+            return method == "GET" ? await ReadServiceRuntimesAsync(request, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
+
+        if (path == ControllerManagementApiContract.ServicesPath)
+            return method switch
+            {
+                "GET" => await ReadServicesAsync(request, cancellationToken).ConfigureAwait(false),
+                "POST" => await CreateServiceAsync(request, cancellationToken).ConfigureAwait(false),
+                _ => ControllerManagementResponseBuilder.MethodNotAllowed
+            };
+        if (path == ControllerManagementApiContract.ExtensionsPath)
+            return method == "GET" ? await ReadExtensionsAsync(request, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
+
+        if (TryGetEnvironmentPath(path, out var environmentServiceId))
+            return method switch
+            {
+                "GET" => await ReadEnvironmentAsync(request, environmentServiceId, cancellationToken).ConfigureAwait(false),
+                "PUT" => await PutEnvironmentAsync(request, environmentServiceId, cancellationToken).ConfigureAwait(false),
+                "DELETE" => await DeleteEnvironmentAsync(request, environmentServiceId, cancellationToken).ConfigureAwait(false),
+                _ => ControllerManagementResponseBuilder.MethodNotAllowed
+            };
+        if (TryGetSettingsPath(path, out var settingsExtensionId))
+            return method switch
+            {
+                "GET" => await ReadExtensionSettingsAsync(request, settingsExtensionId, cancellationToken).ConfigureAwait(false),
+                "PUT" => await PutExtensionSettingsAsync(request, settingsExtensionId, cancellationToken).ConfigureAwait(false),
+                "DELETE" => await DeleteExtensionSettingsAsync(request, settingsExtensionId, cancellationToken).ConfigureAwait(false),
+                _ => ControllerManagementResponseBuilder.MethodNotAllowed
+            };
+        if (TryGetMemberPath(path, ControllerManagementApiContract.RoutesPath, out var routeId))
+            return method switch
+            {
+                "GET" => await ReadRouteAsync(request, routeId, cancellationToken).ConfigureAwait(false),
+                "PATCH" => await PatchRouteAsync(request, routeId, cancellationToken).ConfigureAwait(false),
+                "DELETE" => await DeleteRouteAsync(request, routeId, cancellationToken).ConfigureAwait(false),
+                _ => ControllerManagementResponseBuilder.MethodNotAllowed
+            };
+        if (TryGetServiceRuntimePath(path, out var runtimeServiceId))
+            return method == "GET" ? await ReadServiceRuntimeAsync(request, runtimeServiceId, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
+
+        if (TryGetMemberPath(path, ControllerManagementApiContract.ServicesPath, out var serviceId))
+            return method switch
+            {
+                "GET" => await ReadServiceAsync(request, serviceId, cancellationToken).ConfigureAwait(false),
+                "PATCH" => await PatchServiceAsync(request, serviceId, cancellationToken).ConfigureAwait(false),
+                "DELETE" => await DeleteServiceAsync(request, serviceId, cancellationToken).ConfigureAwait(false),
+                _ => ControllerManagementResponseBuilder.MethodNotAllowed
+            };
+        if (TryGetExtensionMemberPath(path, out var extensionId))
+            return method == "GET" ? await ReadExtensionAsync(request, extensionId, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
+
+        return ControllerManagementResponseBuilder.NotFound;
+    }
+
     /// <summary>Provisions the private HostRoute bridge route; this is not a public dispatch path.</summary>
     internal async ValueTask ProvisionHostRouteAsync(string handlerId, CancellationToken cancellationToken)
     {
-        _ = await ProvisionHostRouteAsync(handlerId, ownershipMarker: null, cancellationToken).ConfigureAwait(false);
+        _ = await ProvisionHostRouteAsync(handlerId, _options, ownershipMarker: null, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Provisions a private HostRoute with the active options.</summary>
+    internal ValueTask<ProvisionedHostRouteIdentity?> ProvisionHostRouteAsync(
+        string handlerId,
+        string? ownershipMarker,
+        CancellationToken cancellationToken) =>
+        ProvisionHostRouteAsync(handlerId, _options, ownershipMarker, cancellationToken);
 
-    /// <summary>Provisions a private HostRoute and optionally stamps an internal ownership marker.</summary>
-    internal async ValueTask<ProvisionedHostRouteIdentity?> ProvisionHostRouteAsync(string handlerId, string? ownershipMarker, CancellationToken cancellationToken)
+    /// <summary>Provisions a private HostRoute using candidate options during reconciliation.</summary>
+    internal async ValueTask<ProvisionedHostRouteIdentity?> ProvisionHostRouteAsync(
+        string handlerId,
+        ControllerOptions options,
+        string? ownershipMarker,
+        CancellationToken cancellationToken)
     {
-        if (!_options.EnableHostRoute) return null;
+        ArgumentNullException.ThrowIfNull(options);
+        if (!options.EnableHostRoute) return null;
         var bridge = _bridge ?? throw new InvalidOperationException("The controller bridge is unavailable.");
-        if (!HasFullConfigurationScope() || !ExtensionAbi.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
+        if (!HasFullConfigurationScope(options) || !ExtensionAbi.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
 
-        var path = _options.HostRoutePath ?? throw new InvalidOperationException("The Host route path is unavailable.");
+        var path = options.HostRoutePath ?? throw new InvalidOperationException("The Host route path is unavailable.");
         if (ownershipMarker is null)
         {
             var ownerRead = await bridge.ConfigurationApi.ReadAsync(cancellationToken).ConfigureAwait(false);
@@ -202,6 +259,43 @@ internal sealed class ControllerManagementCore
         var routes = snapshot.Routes.Where(route => !stale.Contains(route)).ToImmutableArray();
         var write = await bridge.FullConfiguration.ReplaceAsync(snapshot.Version, new ConfigurationChangeSet(snapshot.GlobalSettings, routes, snapshot.Services, snapshot.ExtensionRecords, snapshot.ExtensionSettings), cancellationToken).ConfigureAwait(false);
         if (!write.IsSuccess) throw new InvalidOperationException("Stale controller bootstrap routes could not be removed.");
+    }
+
+    private async ValueTask<ControllerManagementResponse> ReadStateAsync(
+        ControllerManagementRequest request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!RequireNoIfMatch(request) || !RequireEmptyBody(request))
+        {
+            return ControllerManagementResponseBuilder.InvalidRequest;
+        }
+
+        var state = _stateProvider is null
+            ? null
+            : await _stateProvider(cancellationToken).ConfigureAwait(false);
+        return state is null
+            ? ControllerManagementResponseBuilder.Unavailable
+            : ControllerManagementResponseBuilder.SuccessUnversioned(state);
+    }
+
+    private async ValueTask<ControllerManagementResponse> ReloadSettingsAsync(
+        ControllerManagementRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryReadIfMatch(request, out var expectedVersion, out var precondition))
+        {
+            return precondition!;
+        }
+
+        if (!RequireEmptyBody(request))
+        {
+            return ControllerManagementResponseBuilder.InvalidRequest;
+        }
+
+        return _reloadHandler is null
+            ? ControllerManagementResponseBuilder.Unavailable
+            : await _reloadHandler(expectedVersion, cancellationToken).ConfigureAwait(false);
     }
 
     private async ValueTask<ControllerManagementResponse> ReadRootAsync(ControllerManagementRequest request, CancellationToken cancellationToken)
@@ -474,6 +568,190 @@ internal sealed class ControllerManagementCore
         var write = await ReplaceAsync(expectedVersion, NewChanges(snapshot, extensionSettings: replacement), cancellationToken).ConfigureAwait(false);
         return write.IsSuccess ? ControllerManagementResponseBuilder.NoContent(write.NewVersion!.Value) : ControllerManagementResponseBuilder.FromConfigurationErrors(write.Errors);
     }
+    /// <summary>Atomically replaces a verified bootstrap route with a configured HostRoute.</summary>
+    internal async ValueTask ReplaceBootstrapWithConfiguredHostRouteAsync(
+        string handlerId,
+        ProvisionedHostRouteIdentity identity,
+        string ownershipMarker,
+        ControllerOptions options,
+        CancellationToken cancellationToken)
+    {
+        if (identity.RouteId == Guid.Empty || !ControllerOptions.IsCanonicalManagementPath(identity.CanonicalPath))
+        {
+            throw new ArgumentException("The provisioned route identity is invalid.", nameof(identity));
+        }
+        ValidateHostRouteTransitionIdentity(handlerId, options, ownershipMarker);
+        var bridge = _bridge ?? throw new InvalidOperationException("The controller bridge is unavailable.");
+        if (!HasFullConfigurationScope(options) || !ExtensionAbi.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
+        var path = options.HostRoutePath!;
+        var read = await bridge.FullConfiguration.ReadAsync(cancellationToken).ConfigureAwait(false);
+        if (!read.IsSuccess || read.Value is not { } snapshot) throw new InvalidOperationException("The controller route configuration is unavailable.");
+
+        var bootstrapRoute = snapshot.Routes.SingleOrDefault(route => route.Id == identity.RouteId);
+        if (bootstrapRoute is not null && !IsBootstrapRoute(bootstrapRoute, identity, handlerId, ownershipMarker))
+        {
+            throw new InvalidOperationException("The bootstrap route ownership proof no longer matches.");
+        }
+
+        var handlerRoutes = snapshot.Routes.Where(route =>
+            route.Target is ExtensionHandlerRouteTargetConfiguration target &&
+            string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal)).ToArray();
+        var candidateRoute = handlerRoutes.Where(route =>
+            route.Matcher.Type == RouteMatcherType.Prefix &&
+            string.Equals(route.Matcher.Pattern, path, StringComparison.Ordinal)).ToArray();
+        if (candidateRoute.Length > 1) throw new InvalidOperationException("Duplicate configured controller routes are configured.");
+        if (snapshot.Routes.Any(route =>
+            string.Equals(route.Matcher.Pattern, path, StringComparison.Ordinal) &&
+            (route.Target is not ExtensionHandlerRouteTargetConfiguration target || !string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal))))
+        {
+            throw new InvalidOperationException("The configured controller route is already owned by another target.");
+        }
+
+        if (bootstrapRoute is null)
+        {
+            if (candidateRoute.Length == 1) return;
+            if (handlerRoutes.Length != 0) throw new InvalidOperationException("A non-bootstrap controller route already exists.");
+        }
+        else if (handlerRoutes.Any(route => route.Id != identity.RouteId))
+        {
+            throw new InvalidOperationException("A non-bootstrap controller route already exists.");
+        }
+
+        var configuredRoute = new RouteConfiguration(
+            bootstrapRoute?.Id ?? Guid.CreateVersion7(),
+            true,
+            new RouteMatcherConfiguration(RouteMatcherType.Prefix, path, ImmutableArray<string>.Empty, ImmutableArray<string>.Empty),
+            new ExtensionHandlerRouteTargetConfiguration(handlerId),
+            int.MaxValue,
+            new ForwardingConfiguration(ForwardingMode.Preserve, null),
+            ImmutableArray<HeaderRewriteConfiguration>.Empty,
+            ImmutableArray<HeaderRewriteConfiguration>.Empty,
+            string.Empty,
+            bootstrapRoute?.CreatedAt ?? DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            bootstrapRoute?.Version ?? 0);
+        var routes = snapshot.Routes
+            .Where(route => bootstrapRoute is null || route.Id != bootstrapRoute.Id)
+            .Append(configuredRoute)
+            .ToImmutableArray();
+        var write = await bridge.FullConfiguration.ReplaceAsync(
+            snapshot.Version,
+            new ConfigurationChangeSet(snapshot.GlobalSettings, routes, snapshot.Services, snapshot.ExtensionRecords, snapshot.ExtensionSettings),
+            cancellationToken).ConfigureAwait(false);
+        if (!write.IsSuccess) throw new InvalidOperationException("The configured controller route could not be provisioned.");
+    }
+
+    /// <summary>Atomically ensures the desired configured HostRoute and removes only its old path.</summary>
+    internal async ValueTask EnsureConfiguredHostRouteAsync(
+        string handlerId,
+        string? oldCanonicalPath,
+        ControllerOptions options,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentException.ThrowIfNullOrEmpty(handlerId);
+        if (!string.Equals(handlerId, ControllerManagementApiContract.HandlerId, StringComparison.Ordinal) ||
+            !options.EnableHostRoute || options.HostRoutePath is not { } newPath ||
+            !ControllerOptions.IsCanonicalManagementPath(newPath) ||
+            (oldCanonicalPath is not null && !ControllerOptions.IsCanonicalManagementPath(oldCanonicalPath)))
+        {
+            throw new InvalidOperationException("The configured controller route identity is invalid.");
+        }
+
+        var bridge = _bridge ?? throw new InvalidOperationException("The controller bridge is unavailable.");
+        if (!HasFullConfigurationScope(options) || !ExtensionAbi.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
+        var read = await bridge.FullConfiguration.ReadAsync(cancellationToken).ConfigureAwait(false);
+        if (!read.IsSuccess || read.Value is not { } snapshot) throw new InvalidOperationException("The controller route configuration is unavailable.");
+
+        var handlerRoutes = snapshot.Routes.Where(route =>
+            route.Target is ExtensionHandlerRouteTargetConfiguration target &&
+            string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal)).ToArray();
+        if (handlerRoutes.Any(route => HasBootstrapOwnershipMarker(route.MetadataJson, handlerId)))
+        {
+            throw new InvalidOperationException("A bootstrap controller route exists in configured mode.");
+        }
+
+        var oldMatches = oldCanonicalPath is null
+            ? Array.Empty<RouteConfiguration>()
+            : handlerRoutes.Where(route => string.Equals(route.Matcher.Pattern, oldCanonicalPath, StringComparison.Ordinal)).ToArray();
+        if (oldMatches.Length > 1) throw new InvalidOperationException("Duplicate configured controller routes are configured.");
+        var newMatches = handlerRoutes.Where(route => string.Equals(route.Matcher.Pattern, newPath, StringComparison.Ordinal)).ToArray();
+        if (newMatches.Length > 1) throw new InvalidOperationException("Duplicate configured controller routes are configured.");
+        if (snapshot.Routes.Any(route =>
+            string.Equals(route.Matcher.Pattern, newPath, StringComparison.Ordinal) &&
+            (route.Target is not ExtensionHandlerRouteTargetConfiguration target || !string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal))))
+        {
+            throw new InvalidOperationException("The configured controller route is already owned by another target.");
+        }
+
+        var oldRoute = oldMatches.SingleOrDefault();
+        var newRouteExisting = newMatches.SingleOrDefault();
+        if (handlerRoutes.Any(route =>
+            (oldRoute is null || route.Id != oldRoute.Id) &&
+            (newRouteExisting is null || route.Id != newRouteExisting.Id)))
+        {
+            throw new InvalidOperationException("Duplicate configured controller routes are configured.");
+        }
+        if (oldRoute is null && newRouteExisting is not null && IsDesiredConfiguredRoute(newRouteExisting, handlerId, newPath)) return;
+
+        var desiredRoute = new RouteConfiguration(
+            newRouteExisting?.Id ?? oldRoute?.Id ?? Guid.CreateVersion7(),
+            true,
+            new RouteMatcherConfiguration(RouteMatcherType.Prefix, newPath, ImmutableArray<string>.Empty, ImmutableArray<string>.Empty),
+            new ExtensionHandlerRouteTargetConfiguration(handlerId),
+            int.MaxValue,
+            new ForwardingConfiguration(ForwardingMode.Preserve, null),
+            ImmutableArray<HeaderRewriteConfiguration>.Empty,
+            ImmutableArray<HeaderRewriteConfiguration>.Empty,
+            string.Empty,
+            newRouteExisting?.CreatedAt ?? oldRoute?.CreatedAt ?? DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            newRouteExisting?.Version ?? oldRoute?.Version ?? 0);
+        var removedIds = new HashSet<Guid>();
+        if (oldRoute is not null) removedIds.Add(oldRoute.Id);
+        if (newRouteExisting is not null) removedIds.Add(newRouteExisting.Id);
+        var routes = snapshot.Routes.Where(route => !removedIds.Contains(route.Id)).Append(desiredRoute).ToImmutableArray();
+        var write = await bridge.FullConfiguration.ReplaceAsync(
+            snapshot.Version,
+            new ConfigurationChangeSet(snapshot.GlobalSettings, routes, snapshot.Services, snapshot.ExtensionRecords, snapshot.ExtensionSettings),
+            cancellationToken).ConfigureAwait(false);
+        if (!write.IsSuccess) throw new InvalidOperationException("The configured controller route could not be provisioned.");
+    }
+
+    /// <summary>Removes only the exact configured controller route for a handler and path.</summary>
+    internal async ValueTask RemoveConfiguredHostRouteAsync(
+        string handlerId,
+        string canonicalPath,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(handlerId);
+        if (!string.Equals(handlerId, ControllerManagementApiContract.HandlerId, StringComparison.Ordinal) ||
+            !ControllerOptions.IsCanonicalManagementPath(canonicalPath))
+        {
+            throw new InvalidOperationException("The configured controller route identity is invalid.");
+        }
+
+        var bridge = _bridge ?? throw new InvalidOperationException("The controller bridge is unavailable.");
+        if (!HasFullConfigurationScope() || !ExtensionAbi.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
+        var read = await bridge.FullConfiguration.ReadAsync(cancellationToken).ConfigureAwait(false);
+        if (!read.IsSuccess || read.Value is not { } snapshot) throw new InvalidOperationException("The controller route configuration is unavailable.");
+        var candidates = snapshot.Routes.Where(route =>
+            route.Target is ExtensionHandlerRouteTargetConfiguration target &&
+            string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal) &&
+            route.Matcher.Type == RouteMatcherType.Prefix &&
+            string.Equals(route.Matcher.Pattern, canonicalPath, StringComparison.Ordinal)).ToArray();
+        if (candidates.Length == 0) return;
+        if (candidates.Length != 1) throw new InvalidOperationException("Duplicate configured controller routes are configured.");
+
+        var routeId = candidates[0].Id;
+        var routes = snapshot.Routes.Where(route => route.Id != routeId).ToImmutableArray();
+        var write = await bridge.FullConfiguration.ReplaceAsync(
+            snapshot.Version,
+            new ConfigurationChangeSet(snapshot.GlobalSettings, routes, snapshot.Services, snapshot.ExtensionRecords, snapshot.ExtensionSettings),
+            cancellationToken).ConfigureAwait(false);
+        if (!write.IsSuccess) throw new InvalidOperationException("The configured controller route could not be removed.");
+    }
+
     /// <summary>Removes only the exact private bootstrap route identity after rechecking ownership.</summary>
     internal async ValueTask RemoveProvisionedHostRouteAsync(
         string handlerId,
@@ -506,6 +784,53 @@ internal sealed class ControllerManagementCore
         var write = await bridge.FullConfiguration.ReplaceAsync(snapshot.Version, new ConfigurationChangeSet(snapshot.GlobalSettings, routes, snapshot.Services, snapshot.ExtensionRecords, snapshot.ExtensionSettings), cancellationToken).ConfigureAwait(false);
         if (!write.IsSuccess) throw new InvalidOperationException("The controller route could not be removed.");
     }
+
+    private static void ValidateHostRouteTransitionIdentity(
+        string handlerId,
+        ControllerOptions options,
+        string ownershipMarker)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(handlerId);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentException.ThrowIfNullOrEmpty(ownershipMarker);
+        if (!string.Equals(handlerId, ControllerManagementApiContract.HandlerId, StringComparison.Ordinal) ||
+            !options.EnableHostRoute || options.HostRoutePath is not { } path ||
+            !ControllerOptions.IsCanonicalManagementPath(path) ||
+            !ownershipMarker.StartsWith(ControllerOptions.BootstrapOwnershipPrefix, StringComparison.Ordinal) ||
+            ownershipMarker.Length <= ControllerOptions.BootstrapOwnershipPrefix.Length)
+        {
+            throw new InvalidOperationException("The HostRoute transition identity is invalid.");
+        }
+    }
+
+    /// <summary>Verifies the full marker-bearing bootstrap route proof.</summary>
+    internal static bool IsBootstrapRoute(
+        RouteConfiguration route,
+        ProvisionedHostRouteIdentity identity,
+        string handlerId,
+        string ownershipMarker) =>
+        route.Id == identity.RouteId &&
+        route.Target is ExtensionHandlerRouteTargetConfiguration target &&
+        string.Equals(target.HandlerId, ControllerManagementApiContract.HandlerId, StringComparison.Ordinal) &&
+        string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal) &&
+        route.Matcher.Type == RouteMatcherType.Prefix &&
+        string.Equals(route.Matcher.Pattern, identity.CanonicalPath, StringComparison.Ordinal) &&
+        HasOwnershipMarker(route.MetadataJson, handlerId, ownershipMarker);
+
+    private static bool IsDesiredConfiguredRoute(RouteConfiguration route, string handlerId, string path) =>
+        route.Enabled &&
+        route.Target is ExtensionHandlerRouteTargetConfiguration target &&
+        string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal) &&
+        route.Matcher.Type == RouteMatcherType.Prefix &&
+        string.Equals(route.Matcher.Pattern, path, StringComparison.Ordinal) &&
+        route.Matcher.HostPatterns.IsDefaultOrEmpty &&
+        route.Matcher.Methods.IsDefaultOrEmpty &&
+        route.Priority == int.MaxValue &&
+        route.Forwarding.Mode == ForwardingMode.Preserve &&
+        route.Forwarding.ReplaceTemplate is null &&
+        route.RequestHeaderRewrites.IsDefaultOrEmpty &&
+        route.ResponseHeaderRewrites.IsDefaultOrEmpty &&
+        string.Equals(route.MetadataJson, string.Empty, StringComparison.Ordinal);
 
     private static bool HasOwnershipMarker(string metadataJson, string handlerId, string ownershipMarker) =>
         TryReadOwnershipMetadata(metadataJson, out var controllerId, out var metadataHandlerId, out var metadataOwnership) &&
@@ -557,7 +882,9 @@ internal sealed class ControllerManagementCore
     private ValueTask<ConfigurationReadResult<HostConfigurationSnapshot>> ReadSnapshotAsync(CancellationToken cancellationToken) => _bridge!.FullConfiguration.ReadAsync(cancellationToken);
     private ValueTask<ConfigurationWriteResult> ReplaceAsync(long expectedVersion, ConfigurationChangeSet changes, CancellationToken cancellationToken) => _bridge!.FullConfiguration.ReplaceAsync(expectedVersion, changes, cancellationToken);
     private static ConfigurationChangeSet NewChanges(HostConfigurationSnapshot snapshot, GlobalSettingsConfiguration? globalSettings = null, ImmutableArray<RouteConfiguration>? routes = null, ImmutableArray<ServiceConfiguration>? services = null, ImmutableArray<ExtensionRecordConfiguration>? extensionRecords = null, ImmutableArray<ExtensionSettingsConfiguration>? extensionSettings = null) => new(globalSettings ?? snapshot.GlobalSettings, routes ?? snapshot.Routes, services ?? snapshot.Services, extensionRecords ?? snapshot.ExtensionRecords, extensionSettings ?? snapshot.ExtensionSettings);
-    private bool HasFullConfigurationScope() => (_options.ApiScope & ControllerApiScope.FullConfiguration) == ControllerApiScope.FullConfiguration;
+    private bool HasFullConfigurationScope() => HasFullConfigurationScope(_options);
+    private static bool HasFullConfigurationScope(ControllerOptions options) =>
+        (options.ApiScope & ControllerApiScope.FullConfiguration) == ControllerApiScope.FullConfiguration;
 
     private string? NormalizePath(string rawPath, ControllerTransport transport)
     {

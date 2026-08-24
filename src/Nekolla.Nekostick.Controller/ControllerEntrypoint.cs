@@ -110,6 +110,11 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
                 }
 
                 var options = GetEffectiveOptions(hydratedOptions);
+                if (_explicitOptions is not null && !HasAnyListener(options))
+                {
+                    ReportDegraded(context, "options.all_listeners_disabled");
+                    throw new InvalidOperationException("Controller options leave every listener disabled.");
+                }
                 var validation = options.Validate();
                 if (!validation.IsValid)
                 {
@@ -124,8 +129,12 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
                     new ControllerManagementDispatcher(options, context.Host),
                     options,
                     transportAdapters: null,
-                    bootstrapOwnershipMarker: bootstrapMarker);
+                    bootstrapOwnershipMarker: bootstrapMarker,
+                    bridge: context.Host);
                 _runtime = runtime;
+                runtime.Dispatcher.ConfigureRuntimeCallbacks(
+                    (expectedVersion, reloadCancellationToken) => ReloadSettingsAsync(context.Host, runtime, expectedVersion, reloadCancellationToken),
+                    runtime.GetStateAsync);
             }
 
             var handlerFactory = _handlerFactory ?? new ControllerManagementHandlerFactory();
@@ -194,6 +203,33 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
             _lifecycleGate.Release();
         }
     }
+
+    private async ValueTask<ControllerManagementResponse> ReloadSettingsAsync(
+        IExtensionHostBridge bridge,
+        ControllerRuntime runtime,
+        long expectedVersion,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(bridge);
+        ArgumentNullException.ThrowIfNull(runtime);
+        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!ReferenceEquals(_runtime, runtime) || !runtime.IsStarted)
+            {
+                return ControllerManagementResponseBuilder.Unavailable;
+            }
+
+            return await runtime.ReloadAsync(expectedVersion, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
+    private static bool HasAnyListener(ControllerOptions options) =>
+        options.EnableHostRoute || options.EnableHttpJson || options.EnableGrpc || options.EnableUnixSocket;
 
     private ControllerOptions GetEffectiveOptions(ControllerOptions hydratedOptions)
     {

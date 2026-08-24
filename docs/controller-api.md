@@ -4,44 +4,15 @@
 
 所有启用的传输共享同一套资源、认证、JSON、并发和错误语义。控制器不绑定远程 TCP 地址。
 
-## 1. 快速请求
-
-下面示例假设启用了 loopback HTTP：
-
-```bash
-API_KEY='<配置中的 API key>'
-BASE='http://127.0.0.1:48123'
-
-curl --fail-with-body \
-  --header "x-nekostick-controller-key: $API_KEY" \
-  "$BASE/v1"
-```
-
-GET 请求的 body 必须为空。持久化配置响应会带强 ETag；成功 body 是统一 envelope。
-
-### 条件更新示例
-
-先读取资源并保存响应 header 中的 ETag，再把该版本作为 `If-Match` 提交：
-
-```bash
-curl --fail-with-body \
-  --request PATCH \
-  --header "x-nekostick-controller-key: $API_KEY" \
-  --header "Content-Type: application/merge-patch+json" \
-  --header 'If-Match: "42"' \
-  --data '{"enabled": false}' \
-  "$BASE/v1/services/01234567-89ab-7cde-8f01-23456789abcd"
-```
-
-`412 precondition_failed` 表示版本已过期。调用方应重新读取最新 ETag，再决定是否重试。
-
-## 2. 资源一览
+## 1. 资源一览
 
 路径以规范形式书写，不带末尾 `/`：
 
 | Method | Path | 用途 |
 | --- | --- | --- |
 | `GET` | `/v1` | 读取 API 根信息和配置概览 |
+| `GET` | `/v1/controller/state` | 读取 bootstrap 模式和 listener 运行状态 |
+| `POST` | `/v1/controller/reload-settings` | 重新读取并热应用 controller extension settings |
 | `GET`, `PATCH` | `/v1/global-settings` | 读取或更新全局设置 |
 | `GET`, `POST` | `/v1/routes` | 列出或创建 route |
 | `GET`, `PATCH`, `DELETE` | `/v1/routes/{id}` | 读取、更新或删除 route |
@@ -58,9 +29,9 @@ route/service `{id}` 是 GUID；extension `{id}` 是不含 `/` 的非空字符�
 
 RouteEvents 的 observation、hook、stream、callback 和相关 API 不受支持。
 
-## 3. 传输
+## 2. 传输
 
-### 3.1 HostRoute
+### 2.1 HostRoute
 
 HostRoute 由 Host 挂到配置的 `hostRoutePath`；Host 决定实际 HTTP 暴露方式。控制器不会创建公网入口。
 
@@ -73,7 +44,7 @@ HostRoute 由 Host 挂到配置的 `hostRoutePath`；Host 决定实际 HTTP 暴�
 
 控制器自己的 HostRoute 是私有保留 route：公共列表会隐藏它，按 ID 读取返回 `404`，创建、修改或删除该保留边界返回 `409 reserved_route`。
 
-### 3.2 HTTP/JSON
+### 2.2 HTTP/JSON
 
 启用后只监听 loopback HTTP/1.1 明文：
 
@@ -84,7 +55,7 @@ http://[::1]:<httpPort>/v1/...
 
 API key 放在 header `x-nekostick-controller-key` 中。该传输不提供 HTTPS。
 
-### 3.3 gRPC
+### 2.3 gRPC
 
 gRPC 提供一个通用 unary gateway，不另定义资源 RPC：
 
@@ -103,13 +74,13 @@ nekostick.controller.management.v1.ControllerManagement/Invoke
 
 API key 只能放在 gRPC metadata 的 `x-nekostick-controller-key`。把认证 header 放进 protobuf envelope 会得到 `400 invalid_request`。可交付的 `InvokeResponse` 保留与 HTTP 相同的 status、headers 和 canonical JSON body；不要只读取粗粒度 `InvokeResponse.code`。
 
-### 3.4 Unix-domain socket
+### 2.4 Unix-domain socket
 
 Unix socket 承载 HTTP/1.1，仅在非 Windows 平台可用。客户端连接配置的绝对 socket path，并像 HTTP 请求一样发送逻辑路径和 API key header。
 
 启动时最终 socket path 必须不存在；已有文件、目录、symlink 或 reparse point 不会被覆盖。父目录必须是安全的真实目录，group/other 不可写，也不能经过 `/tmp` 或 `/private/tmp`。socket 文件模式固定并验证为 `0600`。停止时只有在所有权和安全性仍可证明时才删除 socket。
 
-## 4. 认证与请求边界
+## 3. 认证与请求边界
 
 所有启用传输都使用同一个 API key：
 
@@ -134,7 +105,7 @@ key 必须恰好出现一次，长度 `32..4096`，不能包含空白。HTTP、U
 
 带 body 的写入要求恰好一个 `Content-Type`。普通写入使用 `application/json`；PATCH 也可以使用 `application/merge-patch+json`。JSON 使用 camelCase、字符串 enum、最大深度 32，不允许未知字段、注释或尾逗号。
 
-## 5. 响应 envelope
+## 4. 响应 envelope
 
 成功响应：
 
@@ -168,16 +139,14 @@ key 必须恰好出现一次，长度 `32..4096`，不能包含空白。HTTP、U
 | `ok` | 是否成功 |
 | `code` | 稳定机器码，客户端应按它分支 |
 | `message` | 固定人类可读文本，不适合程序化分支 |
-| `data` | 资源结果；错误或 `204` 时为空 |
-| `version` | 持久化配置成功响应的聚合版本；runtime telemetry 固定为 `null` |
+| `version` | 需要聚合版本的成功响应（包括 reload-settings）的 Host 聚合版本；state 和 runtime telemetry 固定为 `null` |
 
-持久化配置成功响应带强 ETag，例如 `ETag: "42"`。runtime telemetry 成功响应不带 ETag。
+持久化配置和 `reload-settings` 成功响应带强 ETag，例如 `ETag: "42"`；state 和 runtime telemetry 成功响应不带 ETag。
 
 ### 状态码
 
 | Status | envelope `code` | 含义 |
-| ---: | --- | --- |
-| 200 | `ok` | GET、PATCH、PUT 或 runtime GET 成功 |
+| 200 | `ok` | GET、PATCH、PUT、runtime GET、state GET 或 settings reload 成功 |
 | 201 | `ok` | POST 创建成功；带 `Location` |
 | 204 | 无 body | DELETE 成功；响应 header 带新 ETag |
 | 400 | `invalid_request` | JSON、header、body、ID、path 或资源语义无效 |
@@ -195,12 +164,13 @@ key 必须恰好出现一次，长度 `32..4096`，不能包含空白。HTTP、U
 
 transport-level admission 失败时，HTTP/Unix 可能直接返回空 body 的 `400`，没有 canonical envelope。客户端不要强行解析这种 body。
 
-## 6. ETag 与 Merge Patch
+## 5. ETag 与 Merge Patch
 
-这些规则只适用于持久化配置 mutation；两个 runtime telemetry GET 不适用。
+这些规则适用于持久化配置 mutation，以及需要以 Host 聚合版本为条件的 `POST /v1/controller/reload-settings`；state 和 runtime telemetry GET 不适用。
 
 以下操作都要求恰好一个强 quoted aggregate `If-Match`：
 
+- `POST /v1/controller/reload-settings`；
 - `PATCH /v1/global-settings`；
 - `POST`、`PATCH`、`DELETE` route 资源；
 - `POST`、`PATCH`、`DELETE` service 资源；
@@ -216,9 +186,9 @@ transport-level admission 失败时，HTTP/Unix 可能直接返回空 body 的 `
 
 PATCH 使用 JSON Merge Patch：body 必须是 object；`null` 删除字段；object 递归合并；数组整体替换；未知字段无效。PATCH 不能写服务器字段，也不能修改 service `environment`；environment 必须使用专用 subresource。
 
-## 7. 资源字段与示例
+## 6. 资源字段与示例
 
-### 7.1 根资源
+### 6.1 根资源
 
 `GET /v1` 返回配置概览。示例 envelope 的 `data`：
 
@@ -258,7 +228,7 @@ PATCH 使用 JSON Merge Patch：body 必须是 object；`null` 删除字段；ob
 
 根 `version`、envelope `version` 和 ETag 是同一个聚合版本。私有 controller route、service environment 和 extension settings 不会嵌入这里。
 
-### 7.2 Route
+### 6.2 Route
 
 route 的主要可变字段是 `enabled`、`matcher`、`target`、`priority`、`forwarding`、request/response header rewrites、`metadataJson` 和可选 route 覆盖值。服务器字段 `id`、`createdAt`、`updatedAt`、`version` 只能读取。
 
@@ -298,7 +268,7 @@ route 的主要可变字段是 `enabled`、`matcher`、`target`、`priority`、`
 
 `matcher.type` 是 `Exact`、`ExactCaseInsensitive`、`Prefix`、`PrefixCaseInsensitive` 或 `Regex`。`target.type` 是 `Microservice`、`StaticFile` 或 `ExtensionHandler`。示例中的 `rootPath: null` 和 `handlerId: null` 只是明确表示未使用该 target 字段；普通 PATCH 也可以省略这些字段。`forwarding.mode` 是 `Preserve`、`Strip` 或 `Replace`。
 
-### 7.3 Service
+### 6.3 Service
 
 service 的可变字段是 `enabled`、`fileName`、`argumentList`、`workingDirectory`、`startMode`、`restartPolicy` 和 `healthCheck`。create 可一次性提供 `environment` map；service read DTO 永远不会内嵌 environment。
 
@@ -325,7 +295,7 @@ service 的可变字段是 `enabled`、`fileName`、`argumentList`、`workingDir
 
 `startMode` 是 `Eager` 或 `Lazy`；`restartPolicy` 是 `Never`、`OnFailure` 或 `Always`；`healthCheck.type` 是 `Process`、`Tcp` 或 `Http`。
 
-### 7.4 Service environment
+### 6.4 Service environment
 
 这是唯一读取或修改 environment 的公共入口。GET 示例 envelope 的 `data`：
 
@@ -350,7 +320,7 @@ PUT body：
 
 DELETE 清空 environment。environment value 可能包含 secret，应按敏感资料处理。
 
-### 7.5 Service runtime telemetry
+### 6.5 Service runtime telemetry
 
 `GET /v1/services/runtime` 返回 snapshot 数组；`GET /v1/services/{id}/runtime` 返回单个 snapshot。两者都要求空 body，不接受 `If-Match`，成功 envelope 的 `version` 固定为 `null`，响应没有 ETag。
 
@@ -388,7 +358,7 @@ DELETE 清空 environment。environment value 可能包含 secret，应按敏感
 
 控制器不会伪造 Host 没有的 telemetry。member 不存在时返回 `404 not_found`；能力不支持返回 `501 unsupported`；存储或 runtime 数据不可用返回 `503 storage_unavailable`。
 
-### 7.6 Extensions
+### 6.6 Extensions
 
 extension record 是只读信息：
 
@@ -420,9 +390,9 @@ extension settings 是扩展自己的 opaque JSON。GET 返回：
 
 PUT body 只有 `schemaVersion` 和 `settings`；extension identity 来自 URL。extension record 必须已经存在。DELETE 只删除 settings，不删除 extension record。控制器不解释 `settings` 的业务字段。
 
-## 8. Bootstrap 与安全
+## 7. Bootstrap 与安全
 
-### 8.1 零 listener bootstrap
+### 7.1 零 listener bootstrap
 
 如果配置里 HostRoute、HTTP、gRPC、Unix 全部关闭，控制器会为当前启动实例临时启用 HostRoute：
 
@@ -433,7 +403,7 @@ PUT body 只有 `schemaVersion` 和 `settings`；extension identity 来自 URL�
 
 bootstrap credential 不写入持久化配置、响应或异常。正常配置的 API key 永远不会被记录。缺少 Host API 1.3 LogWriter 会使启动失败。
 
-### 8.2 安全使用
+### 7.2 安全使用
 
 - 不要把真实的 API key 或 environment value 写进日志、shell history、错误报告或示例；示例中的 `<API_KEY>` 和 `<secret>` 只是占位符。
 - gRPC API key 只能放在 metadata；protobuf envelope 中的认证 header 会被拒绝。
@@ -441,3 +411,76 @@ bootstrap credential 不写入持久化配置、响应或异常。正常配置�
 - Unix socket 使用可信本地父目录和 `0600`，不要放到公共临时目录。
 - 私有 route 的 handler ID、marker 或随机路径不是认证材料；仍必须提供 API key。
 - 客户端应按 status、envelope `code`、`ok` 和结构化 `data` 分支，不要依赖固定 `message` 文案。
+
+## 8. 快速请求
+
+下面示例假设启用了 loopback HTTP：
+
+```bash
+API_KEY='<配置中的 API key>'
+BASE='http://127.0.0.1:48123'
+
+curl --fail-with-body \
+  --header "x-nekostick-controller-key: $API_KEY" \
+  "$BASE/v1"
+```
+
+GET 请求的 body 必须为空。持久化配置响应会带强 ETag；成功 body 是统一 envelope。
+
+### 条件更新示例
+
+先读取资源并保存响应 header 中的 ETag，再把该版本作为 `If-Match` 提交：
+
+```bash
+curl --fail-with-body \
+  --request PATCH \
+  --header "x-nekostick-controller-key: $API_KEY" \
+  --header "Content-Type: application/merge-patch+json" \
+  --header 'If-Match: "42"' \
+  --data '{"enabled": false}' \
+  "$BASE/v1/services/01234567-89ab-7cde-8f01-23456789abcd"
+```
+
+`412 precondition_failed` 表示版本已过期。调用方应重新读取最新 ETag，再决定是否重试。
+
+### 控制器状态与设置热重载
+
+`GET /v1/controller/state` 返回当前 controller runtime state。它是只读、未版本化的状态读取：请求 body 必须为空，不接受 `If-Match`，成功响应不带 ETag 且 envelope `version` 固定为 `null`。响应只包含 bootstrap 模式和 listener 的 enablement/running 状态，不包含设置值、端口、路径、API key 或其他 secret。每次读取都会对照 Host 配置核实 HostRoute listener 状态；Host 配置暂时不可读时返回 `503 unavailable`。
+
+```json
+{
+  "apiVersion": 1,
+  "ok": true,
+  "code": "ok",
+  "message": "The operation completed.",
+  "data": {
+    "bootstrapMode": true,
+    "listeners": {
+      "hostRoute": { "enabled": true, "running": true },
+      "httpJson": { "enabled": false, "running": false },
+      "grpc": { "enabled": false, "running": false },
+      "unixSocket": { "enabled": false, "running": false }
+    }
+  },
+  "version": null
+}
+```
+
+`POST /v1/controller/reload-settings` 从 Host 重新读取 `nekolla.nekostick.controller` extension settings，并在不重新加载 extension 的情况下应用它们。请求 body 必须为空，并且必须恰好包含一个强聚合 `If-Match`；先读取任一持久化配置资源的 ETag，再提交重载：
+
+```bash
+curl --fail-with-body \
+  --request POST \
+  --header "x-nekostick-controller-key: $API_KEY" \
+  --header 'If-Match: "42"' \
+  --data-binary '' \
+  "$BASE/v1/controller/reload-settings"
+```
+
+成功响应为 `200 ok`，`data` 使用与 state endpoint 相同的 `bootstrapMode` 和 `listeners` 形状；响应 ETag 和 envelope `version` 是本次 Host snapshot 读取使用的当前聚合版本。重载本身不会写回持久化配置。listener enablement、以及可安全协调的 HTTP/gRPC 端口和 HostRoute/Unix socket 路径变化会热应用，无需 extension reload。成功切换 API key 后新 key 立即生效，旧 key 立即失效；任何 key 都不会出现在响应或日志中。
+
+重载是串行化的：执行期间其他配置写操作会排队等待，listener 切换期间新请求可能短暂收到 `503 unavailable`。如果重载停止或更换了承载该请求本身的 listener（例如关闭对应传输或修改端口），`200` 响应可能无法送达；此时通过其余 listener 的 state endpoint 确认重载结果。
+
+设置无效或 listener 协调失败时，控制器会在安全可行时恢复之前的工作配置；无法安全恢复时会停止全部 listener 并拒绝后续请求，fail closed。bootstrap 模式只有在所有明确配置的 listener 都成功启动且 bootstrap route 已安全清理后才会切换为 configured mode。所有 listener 都关闭的设置在 bootstrap 模式下会被拒绝（`400 invalid_request`，bootstrap 保持运行）；在 configured mode 下会被应用：全部 listener 停止后管理 API 完全不可达，恢复需要通过 Host 修改 settings 并重新加载 extension。
+
+重载的 `If-Match` 错误遵循聚合 CAS 规则：缺少 header 返回 `428 precondition_required`，数量、body 或强 ETag 格式不正确返回 `400 invalid_request`，版本过期返回 `412 precondition_failed`。客户端应重新读取最新 ETag 后再决定是否重试。
