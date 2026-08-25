@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Nekolla.Nekostick.Contracts;
+using Nekolla.Nekostick.Controller.Management;
 
 namespace Nekolla.Nekostick.Controller;
 

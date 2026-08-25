@@ -8,86 +8,9 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.Hosting;
+using Nekolla.Nekostick.Controller.Management;
 
 namespace Nekolla.Nekostick.Controller.Adapters.HttpUnix;
-
-/// <summary>
-/// Serves the canonical management API over loopback HTTP/1.1 JSON.
-/// </summary>
-public sealed class HttpJsonTransportAdapter : IControllerTransportAdapter, IDisposable
-{
-    private readonly HttpUnixKestrelAdapter _adapter = new(
-        ControllerTransport.HttpJson,
-        static (kestrel, options) =>
-        {
-            var port = options.HttpPort ?? throw new InvalidOperationException("The HTTP port is unavailable.");
-            kestrel.Listen(IPAddress.Loopback, port, static listenOptions =>
-            {
-                listenOptions.Protocols = HttpProtocols.Http1;
-            });
-            kestrel.Listen(IPAddress.IPv6Loopback, port, static listenOptions =>
-            {
-                listenOptions.Protocols = HttpProtocols.Http1;
-            });
-        });
-
-    /// <inheritdoc />
-    public ControllerTransport Transport => _adapter.Transport;
-
-    /// <inheritdoc />
-    public bool IsStarted => _adapter.IsStarted;
-
-    /// <inheritdoc />
-    public ValueTask StartAsync(
-        IControllerManagementDispatcher dispatcher,
-        ControllerOptions options,
-        CancellationToken cancellationToken = default) =>
-        _adapter.StartAsync(dispatcher, options, cancellationToken);
-
-    /// <inheritdoc />
-    public ValueTask StopAsync(CancellationToken cancellationToken = default) =>
-        _adapter.StopAsync(cancellationToken);
-
-    /// <inheritdoc />
-    public void Dispose() => _adapter.Dispose();
-}
-
-/// <summary>
-/// Serves the canonical management API over a local Unix-domain HTTP/1.1 socket.
-/// </summary>
-public sealed class UnixSocketTransportAdapter : IControllerTransportAdapter, IDisposable
-{
-    private readonly HttpUnixKestrelAdapter _adapter = new(
-        ControllerTransport.UnixSocket,
-        static (kestrel, options) =>
-        {
-            var path = options.UnixSocketPath ?? throw new InvalidOperationException("The Unix socket path is unavailable.");
-            kestrel.ListenUnixSocket(path, static listenOptions =>
-            {
-                listenOptions.Protocols = HttpProtocols.Http1;
-            });
-        });
-
-    /// <inheritdoc />
-    public ControllerTransport Transport => _adapter.Transport;
-
-    /// <inheritdoc />
-    public bool IsStarted => _adapter.IsStarted;
-
-    /// <inheritdoc />
-    public ValueTask StartAsync(
-        IControllerManagementDispatcher dispatcher,
-        ControllerOptions options,
-        CancellationToken cancellationToken = default) =>
-        _adapter.StartAsync(dispatcher, options, cancellationToken);
-
-    /// <inheritdoc />
-    public ValueTask StopAsync(CancellationToken cancellationToken = default) =>
-        _adapter.StopAsync(cancellationToken);
-
-    /// <inheritdoc />
-    public void Dispose() => _adapter.Dispose();
-}
 
 /// <summary>
 /// Owns one Kestrel host and keeps the HTTP and Unix transport lifecycle behavior identical.

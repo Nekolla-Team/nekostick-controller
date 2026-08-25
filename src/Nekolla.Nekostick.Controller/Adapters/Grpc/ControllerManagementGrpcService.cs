@@ -2,6 +2,7 @@ using System.Text;
 using Google.Protobuf;
 using Grpc.Core;
 using Nekolla.Nekostick.Controller.Grpc;
+using Nekolla.Nekostick.Controller.Management;
 
 namespace Nekolla.Nekostick.Controller.Adapters.Grpc;
 
