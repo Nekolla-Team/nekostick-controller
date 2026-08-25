@@ -485,3 +485,4 @@ $RECYCLE.BIN/
 .codegraph
 .orca
 .omp
+.test-run/

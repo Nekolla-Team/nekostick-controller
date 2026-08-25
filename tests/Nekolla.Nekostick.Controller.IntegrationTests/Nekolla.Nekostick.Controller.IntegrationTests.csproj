@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <TestingPlatformDotNetTestSupport>true</TestingPlatformDotNetTestSupport>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>14.0</LangVersion>
+    <IsPackable>false</IsPackable>
+    <NoWarn>$(NoWarn);CS0436</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" Version="1.1.0" />
+    <PackageReference Include="Grpc.Net.Client" Version="2.66.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.66.0" PrivateAssets="All" />
+    <ProjectReference Include="..\..\src\Nekolla.Nekostick.Controller\Nekolla.Nekostick.Controller.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="..\..\src\Nekolla.Nekostick.Controller\Protos\controller_management.proto" GrpcServices="Client" />
+  </ItemGroup>
+</Project>
