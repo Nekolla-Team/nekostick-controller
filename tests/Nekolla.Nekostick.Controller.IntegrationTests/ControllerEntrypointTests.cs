@@ -46,6 +46,24 @@ public sealed class ControllerEntrypointTests
         Assert.Equal(0, settings.Version);
         Assert.NotNull(registration.Handler);
 
+        // The '{}' bootstrap settings default CORS to allow-any so a hosted web UI can reach the
+        // ephemeral route cross-origin; preflight is answered without an API key.
+        var preflight = await registration.Handler.HandleAsync(
+            new ExtensionHandlerRequest(
+                "OPTIONS",
+                "/v1",
+                ImmutableDictionary<string, IEnumerable<string>>.Empty
+                    .WithComparers(StringComparer.OrdinalIgnoreCase)
+                    .Add("Origin", ImmutableArray.Create("http://hosted-webui.example"))
+                    .Add("Access-Control-Request-Method", ImmutableArray.Create("GET")),
+                ReadOnlyMemory<byte>.Empty,
+                isHttps: false),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(204, preflight.StatusCode);
+        Assert.Contains(preflight.Headers, pair =>
+            string.Equals(pair.Key, "Access-Control-Allow-Origin", StringComparison.OrdinalIgnoreCase) &&
+            pair.Value.Single() == "*");
+
         await entrypoint.StopAsync(TestContext.Current.CancellationToken);
     }
 

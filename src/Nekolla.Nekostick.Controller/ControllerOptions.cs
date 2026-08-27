@@ -172,11 +172,13 @@ public sealed class ControllerOptions
     /// <summary>Gets the explicitly selected management capability groups.</summary>
     public ControllerApiScope ApiScope { get; init; } = ControllerApiScope.FullConfiguration;
     /// <summary>
-    /// Gets the browser origins allowed to call the HTTP/JSON listener cross-origin. Empty
-    /// disables CORS entirely; <c>*</c> allows any origin. Every other entry must be an exact
-    /// <c>scheme://host[:port]</c> origin without path, query, fragment, or credentials.
+    /// Gets the browser origins allowed to call browser-facing transports cross-origin. Defaults
+    /// to <c>*</c> (any origin) so fresh and bootstrap installs stay reachable from a hosted web
+    /// UI; set an explicit allowlist to restrict, or an empty array to disable CORS entirely.
+    /// Entries must be exact <c>scheme://host[:port]</c> origins without path, query, fragment,
+    /// or credentials.
     /// </summary>
-    public ImmutableArray<string> CorsAllowedOrigins { get; init; } = ImmutableArray<string>.Empty;
+    public ImmutableArray<string> CorsAllowedOrigins { get; init; } = ImmutableArray.Create("*");
 
     /// <summary>Gets whether any protected transport has been explicitly enabled.</summary>
     public bool RequiresApiKey =>
@@ -262,9 +264,9 @@ public sealed class ControllerOptions
                 UnixSocketMode = document.UnixSocketMode,
                 ApiKey = document.ApiKey,
                 ApiScope = document.ApiScope,
-                CorsAllowedOrigins = document.CorsAllowedOrigins is { Length: > 0 } corsOrigins
-                    ? ImmutableArray.CreateRange(corsOrigins)
-                    : ImmutableArray<string>.Empty
+                CorsAllowedOrigins = document.CorsAllowedOrigins is null
+                    ? ImmutableArray.Create("*")
+                    : ImmutableArray.CreateRange(document.CorsAllowedOrigins)
             };
 
             return true;
