@@ -77,6 +77,39 @@ const environmentServiceId = ref<string | null>(null)
 const environmentRows = ref<EnvironmentRow[]>([])
 const environmentError = ref<string | null>(null)
 
+type ServicePreset = 'resident' | 'onDemand' | 'oneShot'
+
+function applyServicePreset(preset: ServicePreset): void {
+  if (preset === 'resident') {
+    form.startMode = 'Eager'
+    form.restartPolicy = 'Always'
+    form.healthType = 'Process'
+  } else if (preset === 'onDemand') {
+    form.startMode = 'Lazy'
+    form.restartPolicy = 'OnFailure'
+    form.healthType = 'Process'
+  } else {
+    form.startMode = 'Eager'
+    form.restartPolicy = 'Never'
+    form.healthType = 'Process'
+  }
+}
+
+const startModeHint = computed(() =>
+  form.startMode === 'Eager' ? t('services.hints.startEager') : t('services.hints.startLazy'))
+
+const restartPolicyHint = computed(() => ({
+  Never: t('services.hints.restartNever'),
+  OnFailure: t('services.hints.restartOnFailure'),
+  Always: t('services.hints.restartAlways'),
+} as Record<ServiceRestartPolicy, string>)[form.restartPolicy])
+
+const healthTypeHint = computed(() => ({
+  Process: t('services.hints.healthProcess'),
+  Tcp: t('services.hints.healthTcp'),
+  Http: t('services.hints.healthHttp'),
+} as Record<HealthCheckType, string>)[form.healthType])
+
 function blankForm(): ServiceForm {
   return {
     enabled: true,
@@ -342,22 +375,39 @@ const columns = computed<DataTableColumns<ServiceDto>>(() => [
     <n-modal v-model:show="showForm">
       <n-card class="form-modal" :title="editingId ? t('services.modal.edit') : t('services.modal.create')" closable @close="showForm = false">
         <n-form @submit.prevent="save">
+          <div v-if="!editingId" class="preset-row">
+            <span class="preset-label">{{ t('services.presets.label') }}</span>
+            <n-button size="tiny" tertiary @click="applyServicePreset('resident')">{{ t('services.presets.resident') }}</n-button>
+            <n-button size="tiny" tertiary @click="applyServicePreset('onDemand')">{{ t('services.presets.onDemand') }}</n-button>
+            <n-button size="tiny" tertiary @click="applyServicePreset('oneShot')">{{ t('services.presets.oneShot') }}</n-button>
+          </div>
           <n-form-item :label="t('common.enabled')"><n-switch v-model:value="form.enabled" /></n-form-item>
-          <n-form-item :label="t('services.form.fileName')"><n-input v-model:value="form.fileName" /></n-form-item>
-          <n-form-item :label="t('services.form.argumentList')"><n-dynamic-tags v-model:value="form.argumentList" /></n-form-item>
-          <n-form-item :label="t('services.form.workingDirectory')"><n-input v-model:value="form.workingDirectory" /></n-form-item>
+          <n-form-item :label="t('services.form.fileName')">
+            <n-input v-model:value="form.fileName" />
+            <p class="field-hint">{{ t('services.hints.fileName') }}</p>
+          </n-form-item>
+          <n-form-item :label="t('services.form.argumentList')">
+            <n-dynamic-tags v-model:value="form.argumentList" />
+            <p class="field-hint">{{ t('services.hints.argumentList') }}</p>
+          </n-form-item>
+          <n-form-item :label="t('services.form.workingDirectory')">
+            <n-input v-model:value="form.workingDirectory" />
+            <p class="field-hint">{{ t('services.hints.workingDirectory') }}</p>
+          </n-form-item>
           <n-form-item :label="t('services.form.startMode')">
             <n-radio-group v-model:value="form.startMode">
               <n-radio-button value="Eager">{{ t('services.enums.startModes.eager') }}</n-radio-button>
-              <n-radio-button value="Lazy">{{ t('services.enums.startModes.lazy') }}</n-radio-button>
-            </n-radio-group>
+                            <n-radio-button value="Lazy">{{ t('services.enums.startModes.lazy') }}</n-radio-button>
+              </n-radio-group>
+              <p class="field-hint">{{ startModeHint }}</p>
           </n-form-item>
           <n-form-item :label="t('services.form.restartPolicy')">
             <n-radio-group v-model:value="form.restartPolicy">
               <n-radio-button value="Never">{{ t('services.enums.restartPolicies.never') }}</n-radio-button>
               <n-radio-button value="OnFailure">{{ t('services.enums.restartPolicies.onFailure') }}</n-radio-button>
-              <n-radio-button value="Always">{{ t('services.enums.restartPolicies.always') }}</n-radio-button>
-            </n-radio-group>
+                            <n-radio-button value="Always">{{ t('services.enums.restartPolicies.always') }}</n-radio-button>
+              </n-radio-group>
+              <p class="field-hint">{{ restartPolicyHint }}</p>
           </n-form-item>
           <n-form-item :label="t('services.form.healthCheck')">
             <n-radio-group v-model:value="form.healthType">
@@ -365,11 +415,18 @@ const columns = computed<DataTableColumns<ServiceDto>>(() => [
               <n-radio-button value="Tcp">{{ t('services.form.healthTypeOptions.tcp') }}</n-radio-button>
               <n-radio-button value="Http">{{ t('services.form.healthTypeOptions.http') }}</n-radio-button>
             </n-radio-group>
+            <p class="field-hint">{{ healthTypeHint }}</p>
           </n-form-item>
-          <n-form-item v-if="form.healthType === 'Http'" :label="t('services.form.httpPath')"><n-input v-model:value="form.httpPath" /></n-form-item>
-          <n-form-item :label="t('services.form.timeout')"><n-input-number v-model:value="form.timeoutMs" :min="0" /></n-form-item>
+          <n-form-item v-if="form.healthType === 'Http'" :label="t('services.form.httpPath')">
+            <n-input v-model:value="form.httpPath" />
+            <p class="field-hint">{{ t('services.hints.httpPath') }}</p>
+          </n-form-item>
+          <n-form-item :label="t('services.form.timeout')">
+            <n-input-number v-model:value="form.timeoutMs" :min="0" />
+            <p class="field-hint">{{ t('services.hints.timeout') }}</p>
+          </n-form-item>
           <n-alert v-if="formError" type="error" :show-icon="true">{{ formError }}</n-alert>
-          <n-space justify="end">
+          <n-space justify="end" class="form-actions">
             <n-button @click="showForm = false">{{ t('common.cancel') }}</n-button>
             <n-button type="primary" attr-type="submit" :loading="saveMutation.isPending.value">{{ t('common.save') }}</n-button>
           </n-space>
@@ -439,8 +496,42 @@ h1 {
 }
 
 .form-modal {
+  display: flex;
+  flex-direction: column;
   max-height: 90vh;
-  overflow: auto;
+  overflow: hidden;
   width: min(640px, calc(100vw - 32px));
+}
+
+.form-modal :deep(.n-card-content) {
+  overflow-y: auto;
+}
+
+.form-modal :deep(.n-form-item-blank) {
+  flex-wrap: wrap;
+}
+
+.form-actions {
+  margin-top: 16px;
+}
+
+.preset-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.preset-label {
+  color: var(--n-text-color-3);
+  font-size: 13px;
+}
+
+.field-hint {
+  color: var(--n-text-color-3);
+  flex: 0 0 100%;
+  font-size: 12px;
+  margin: 4px 0 0;
 }
 </style>

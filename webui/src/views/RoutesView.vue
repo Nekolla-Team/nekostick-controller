@@ -88,6 +88,53 @@ const rewriteOperations = computed<Array<{ label: string; value: HeaderRewriteOp
   { label: t('routes.options.rewriteOperation.remove'), value: 'Remove' },
 ])
 
+type RoutePreset = 'apiProxy' | 'staticSite' | 'extensionHandler'
+
+function applyRoutePreset(preset: RoutePreset): void {
+  if (preset === 'apiProxy') {
+    form.matcherType = 'Prefix'
+    form.pattern = '/api/'
+    form.targetType = 'Microservice'
+    form.forwardingMode = 'Strip'
+  } else if (preset === 'staticSite') {
+    form.matcherType = 'Prefix'
+    form.pattern = '/'
+    form.targetType = 'StaticFile'
+    form.forwardingMode = 'Preserve'
+  } else {
+    form.matcherType = 'Prefix'
+    form.pattern = '/ext/'
+    form.targetType = 'ExtensionHandler'
+    form.forwardingMode = 'Preserve'
+  }
+}
+
+const matcherTypeHint = computed(() => ({
+  Exact: t('routes.hints.matcherExact'),
+  ExactCaseInsensitive: t('routes.hints.matcherExactCaseInsensitive'),
+  Prefix: t('routes.hints.matcherPrefix'),
+  PrefixCaseInsensitive: t('routes.hints.matcherPrefixCaseInsensitive'),
+  Regex: t('routes.hints.matcherRegex'),
+} as Record<RouteMatcherType, string>)[form.matcherType])
+
+const patternExample = computed(() => form.matcherType === 'Regex'
+  ? t('routes.hints.patternRegexExample')
+  : form.matcherType.startsWith('Prefix')
+    ? t('routes.hints.patternPrefixExample')
+    : t('routes.hints.patternExactExample'))
+
+const targetTypeHint = computed(() => ({
+  Microservice: t('routes.hints.targetMicroservice'),
+  StaticFile: t('routes.hints.targetStaticFile'),
+  ExtensionHandler: t('routes.hints.targetExtensionHandler'),
+} as Record<RouteTargetType, string>)[form.targetType])
+
+const forwardingModeHint = computed(() => ({
+  Preserve: t('routes.hints.forwardingPreserve'),
+  Strip: t('routes.hints.forwardingStrip'),
+  Replace: t('routes.hints.forwardingReplace'),
+} as Record<ForwardingMode, string>)[form.forwardingMode])
+
 function blankForm(): RouteForm {
   return {
     enabled: true,
@@ -369,6 +416,12 @@ const columns = computed<DataTableColumns<RouteDto>>(() => [
     <n-modal v-model:show="showForm">
       <n-card class="form-modal" :title="editingId ? t('routes.modal.editTitle') : t('routes.modal.createTitle')" closable @close="showForm = false">
         <n-form @submit.prevent="save">
+          <div v-if="!editingId" class="preset-row">
+            <span class="preset-label">{{ t('routes.presets.label') }}</span>
+            <n-button size="tiny" tertiary @click="applyRoutePreset('apiProxy')">{{ t('routes.presets.apiProxy') }}</n-button>
+            <n-button size="tiny" tertiary @click="applyRoutePreset('staticSite')">{{ t('routes.presets.staticSite') }}</n-button>
+            <n-button size="tiny" tertiary @click="applyRoutePreset('extensionHandler')">{{ t('routes.presets.extensionHandler') }}</n-button>
+          </div>
           <n-steps :current="currentStep" size="small" class="form-steps">
             <n-step :title="t('routes.steps.matcher')" />
             <n-step :title="t('routes.steps.target')" />
@@ -386,15 +439,19 @@ const columns = computed<DataTableColumns<RouteDto>>(() => [
                     {{ option.label }}
                   </n-radio-button>
                 </n-radio-group>
+                <p class="field-hint">{{ matcherTypeHint }}</p>
               </n-form-item>
               <n-form-item :label="t('routes.form.matcher.pattern')">
                 <n-input v-model:value="form.pattern" :placeholder="t('routes.form.matcher.patternPlaceholder')" />
+                <p class="field-hint">{{ patternExample }}</p>
               </n-form-item>
               <n-form-item :label="t('routes.form.matcher.hostPatterns')">
                 <n-dynamic-tags v-model:value="form.hostPatterns" />
+                <p class="field-hint">{{ t('routes.hints.hostPatterns') }}</p>
               </n-form-item>
               <n-form-item :label="t('routes.form.matcher.methods')">
                 <n-dynamic-tags v-model:value="form.methods" />
+                <p class="field-hint">{{ t('routes.hints.methods') }}</p>
               </n-form-item>
             </n-card>
           </div>
@@ -407,15 +464,19 @@ const columns = computed<DataTableColumns<RouteDto>>(() => [
                   {{ option.label }}
                 </n-radio-button>
               </n-radio-group>
+              <p class="field-hint">{{ targetTypeHint }}</p>
             </n-form-item>
             <n-form-item v-if="form.targetType === 'Microservice'" :label="t('routes.form.target.serviceId')">
               <n-input v-model:value="form.serviceId" />
+              <p class="field-hint">{{ t('routes.hints.serviceId') }}</p>
             </n-form-item>
             <n-form-item v-if="form.targetType === 'StaticFile'" :label="t('routes.form.target.rootPath')">
               <n-input v-model:value="form.rootPath" />
+              <p class="field-hint">{{ t('routes.hints.rootPath') }}</p>
             </n-form-item>
             <n-form-item v-if="form.targetType === 'ExtensionHandler'" :label="t('routes.form.target.handlerId')">
               <n-input v-model:value="form.handlerId" />
+              <p class="field-hint">{{ t('routes.hints.handlerId') }}</p>
             </n-form-item>
           </n-card>
           </div>
@@ -428,18 +489,22 @@ const columns = computed<DataTableColumns<RouteDto>>(() => [
                     {{ option.label }}
                   </n-radio-button>
                 </n-radio-group>
+                <p class="field-hint">{{ forwardingModeHint }}</p>
               </n-form-item>
               <n-form-item v-if="form.forwardingMode === 'Replace'" :label="t('routes.form.forwarding.replaceTemplate')">
                 <n-input v-model:value="form.replaceTemplate" />
+                <p class="field-hint">{{ t('routes.hints.replaceTemplate') }}</p>
               </n-form-item>
               <n-form-item :label="t('routes.form.forwarding.priority')">
                 <n-input-number v-model:value="form.priority" :min="0" />
+                <p class="field-hint">{{ t('routes.hints.priority') }}</p>
               </n-form-item>
             </n-card>
           </div>
           <div v-if="currentStep === 4">
           <n-collapse>
             <n-collapse-item :title="t('routes.form.advanced.title')" name="advanced">
+              <p class="field-hint" style="margin-bottom: 12px">{{ t('routes.hints.rewrites') }}</p>
               <n-form-item :label="t('routes.form.advanced.requestHeaderRewrites')">
                 <n-space vertical class="rewrite-list">
                   <n-space v-for="(rewrite, index) in form.requestHeaderRewrites" :key="`request-${index}`" align="center">
@@ -464,6 +529,7 @@ const columns = computed<DataTableColumns<RouteDto>>(() => [
               </n-form-item>
               <n-form-item :label="t('routes.form.advanced.metadataJson')">
                 <n-input v-model:value="form.metadataJson" type="textarea" :autosize="{ minRows: 3, maxRows: 8 }" />
+                <p class="field-hint">{{ t('routes.hints.metadataJson') }}</p>
               </n-form-item>
               <n-grid :cols="2" :x-gap="16">
                 <n-form-item :label="t('routes.form.advanced.maxRequestBodyBytes')">
@@ -479,13 +545,14 @@ const columns = computed<DataTableColumns<RouteDto>>(() => [
                   <n-input-number v-model:value="form.requestReadTimeoutMs" :min="0" clearable />
                 </n-form-item>
               </n-grid>
+              <p class="field-hint">{{ t('routes.hints.limits') }}</p>
             </n-collapse-item>
           </n-collapse>
           </div>
 
           <ApiErrorAlert v-if="saveMutation.isError.value" :error="saveMutation.error.value" />
           <n-alert v-if="formError" type="error" :show-icon="true">{{ formError }}</n-alert>
-          <n-space justify="end">
+          <n-space justify="end" class="form-actions">
             <n-button v-if="currentStep > 1" @click="previousStep">{{ t('routes.navigation.previous') }}</n-button>
             <n-button v-if="currentStep < 4" type="primary" @click="nextStep">{{ t('routes.navigation.next') }}</n-button>
             <n-button v-else type="primary" :loading="saveMutation.isPending.value" @click="save">{{ t('common.save') }}</n-button>
@@ -522,9 +589,47 @@ h1 {
 }
 
 .form-modal {
+  display: flex;
+  flex-direction: column;
   max-height: 90vh;
-  overflow: auto;
+  overflow: hidden;
   width: min(900px, calc(100vw - 32px));
+}
+
+.form-modal :deep(.n-card-content) {
+  overflow-y: auto;
+}
+
+.form-modal :deep(.n-form-item-blank) {
+  flex-wrap: wrap;
+}
+
+.form-steps {
+  margin-bottom: 16px;
+}
+
+.form-actions {
+  margin-top: 16px;
+}
+
+.preset-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.preset-label {
+  color: var(--n-text-color-3);
+  font-size: 13px;
+}
+
+.field-hint {
+  color: var(--n-text-color-3);
+  flex: 0 0 100%;
+  font-size: 12px;
+  margin: 4px 0 0;
 }
 
 .rewrite-list {
