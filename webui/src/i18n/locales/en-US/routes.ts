@@ -1,0 +1,97 @@
+export const routes = {
+  title: 'Routes',
+  subtitle: 'Manage request matchers, forwarding targets, and priorities.',
+  create: 'New route',
+  columns: {
+    matcher: 'Matcher',
+    target: 'Target',
+    priority: 'Priority',
+  },
+  modal: {
+    editTitle: 'Edit route',
+    createTitle: 'New route',
+  },
+  steps: {
+    matcher: 'Matcher',
+    target: 'Target',
+    forwarding: 'Forwarding',
+    advanced: 'Advanced',
+  },
+  options: {
+    matcher: {
+      exact: 'Exact',
+      exactCaseInsensitive: 'Exact (case-insensitive)',
+      prefix: 'Prefix',
+      prefixCaseInsensitive: 'Prefix (case-insensitive)',
+      regex: 'Regex',
+    },
+    target: {
+      microservice: 'Microservice',
+      staticFile: 'Static file',
+      extensionHandler: 'Extension handler',
+    },
+    forwarding: {
+      preserve: 'Preserve',
+      strip: 'Strip',
+      replace: 'Replace',
+    },
+    rewriteOperation: {
+      set: 'Set',
+      add: 'Add',
+      remove: 'Remove',
+    },
+  },
+  validation: {
+    metadataJsonObject: 'metadataJson must be a JSON object',
+    metadataJsonInvalid: 'metadataJson is not a valid JSON object',
+    matcherPatternRequired: 'Matcher pattern is required',
+    microserviceServiceIdRequired: 'Microservice requires serviceId',
+    staticFileRootPathRequired: 'StaticFile requires rootPath',
+    extensionHandlerIdRequired: 'ExtensionHandler requires handlerId',
+    replaceTemplateRequired: 'Replace forwarding requires replaceTemplate',
+  },
+  form: {
+    type: 'Type',
+    matcher: {
+      title: 'Matcher',
+      pattern: 'Pattern',
+      patternPlaceholder: '/api',
+      hostPatterns: 'Host patterns',
+      methods: 'Methods',
+    },
+    target: {
+      title: 'Target',
+      serviceId: 'Service ID',
+      rootPath: 'Root path',
+      handlerId: 'Handler ID',
+    },
+    forwarding: {
+      title: 'Forwarding',
+      mode: 'Mode',
+      replaceTemplate: 'Replace template',
+      priority: 'Priority',
+    },
+    advanced: {
+      title: 'Advanced settings',
+      requestHeaderRewrites: 'Request header rewrites',
+      responseHeaderRewrites: 'Response header rewrites',
+      headerNamePlaceholder: 'Header name',
+      valuePlaceholder: 'Value',
+      remove: 'Remove',
+      addRequestRewrite: 'Add request rewrite',
+      addResponseRewrite: 'Add response rewrite',
+      metadataJson: 'metadataJson',
+      maxRequestBodyBytes: 'Max request body bytes',
+      maxRequestHeaderBytes: 'Max request header bytes',
+      maxConcurrentRequests: 'Max concurrent requests',
+      requestReadTimeoutMs: 'Request read timeout (ms)',
+    },
+  },
+  navigation: {
+    previous: 'Previous',
+    next: 'Next',
+  },
+  confirm: {
+    deleteRoute: 'Delete this route?',
+  },
+} as const

@@ -1,0 +1,23 @@
+export const errors = {
+  title: 'Request failed',
+  conflict: 'The configuration was modified by someone else. Refresh and try again.',
+  fallback: 'The request failed. Try again later.',
+  networkFallback: 'The network request failed. Check the connection settings and try again.',
+  byKind: {
+    unauthorized: 'Authentication failed. Check the API key in the connection settings.',
+    not_found: 'The requested resource does not exist.',
+    transport_disabled: 'This transport is disabled. Check the controller listener configuration.',
+    reserved_route: 'This route is reserved by the controller and cannot be modified.',
+    conflict: 'The configuration was modified by someone else. Refresh and try again.',
+    precondition_required: 'The resource version is missing. Refresh and try again.',
+    invalid_request: 'The request parameters are invalid. Check the form.',
+    method_not_allowed: 'This operation is not supported.',
+    unsupported: 'The controller does not support this operation.',
+    unavailable: 'The controller is temporarily unavailable. Try again later.',
+    storage_unavailable: 'The controller configuration storage is temporarily unavailable.',
+    response_too_large: 'The controller response exceeded the allowed size.',
+    server: 'The controller returned a server error.',
+    network: 'The network request failed. Check the connection settings.',
+    transport: 'The transport request failed. Try again later.',
+  },
+} as const

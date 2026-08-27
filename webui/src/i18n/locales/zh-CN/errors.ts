@@ -1,0 +1,23 @@
+export const errors = {
+  title: '请求失败',
+  conflict: '配置已被他人修改, 请刷新后重试',
+  fallback: '请求失败, 请稍后重试',
+  networkFallback: '网络请求失败, 请检查连接设置后重试',
+  byKind: {
+    unauthorized: '认证失败, 请在连接设置中检查 API key',
+    not_found: '请求的资源不存在',
+    transport_disabled: '当前传输已关闭, 请检查 controller listener 配置',
+    reserved_route: '该路由是 controller 保留路由, 不能修改',
+    conflict: '配置已被他人修改, 请刷新后重试',
+    precondition_required: '缺少资源版本, 请刷新后重试',
+    invalid_request: '请求参数无效, 请检查表单内容',
+    method_not_allowed: '当前操作不受支持',
+    unsupported: '当前 controller 能力不支持此操作',
+    unavailable: 'controller 暂时不可用, 请稍后重试',
+    storage_unavailable: 'controller 配置存储暂时不可用',
+    response_too_large: 'controller 响应超过允许大小',
+    server: 'controller 返回了服务器错误',
+    network: '网络请求失败, 请检查连接设置',
+    transport: '传输请求失败, 请稍后重试',
+  },
+} as const

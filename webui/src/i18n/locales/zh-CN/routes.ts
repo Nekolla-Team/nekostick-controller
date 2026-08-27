@@ -1,0 +1,97 @@
+export const routes = {
+  title: '路由',
+  subtitle: '管理请求 matcher、转发目标和优先级。',
+  create: '新建路由',
+  columns: {
+    matcher: '匹配器',
+    target: '目标',
+    priority: '优先级',
+  },
+  modal: {
+    editTitle: '编辑路由',
+    createTitle: '新建路由',
+  },
+  steps: {
+    matcher: '匹配器',
+    target: '目标',
+    forwarding: '转发',
+    advanced: '高级',
+  },
+  options: {
+    matcher: {
+      exact: 'Exact',
+      exactCaseInsensitive: 'Exact (case-insensitive)',
+      prefix: 'Prefix',
+      prefixCaseInsensitive: 'Prefix (case-insensitive)',
+      regex: 'Regex',
+    },
+    target: {
+      microservice: 'Microservice',
+      staticFile: 'Static file',
+      extensionHandler: 'Extension handler',
+    },
+    forwarding: {
+      preserve: 'Preserve',
+      strip: 'Strip',
+      replace: 'Replace',
+    },
+    rewriteOperation: {
+      set: 'Set',
+      add: 'Add',
+      remove: 'Remove',
+    },
+  },
+  validation: {
+    metadataJsonObject: 'metadataJson 必须是 JSON object',
+    metadataJsonInvalid: 'metadataJson 不是有效的 JSON object',
+    matcherPatternRequired: 'Matcher pattern 不能为空',
+    microserviceServiceIdRequired: 'Microservice 需要 serviceId',
+    staticFileRootPathRequired: 'StaticFile 需要 rootPath',
+    extensionHandlerIdRequired: 'ExtensionHandler 需要 handlerId',
+    replaceTemplateRequired: 'Replace forwarding 需要 replaceTemplate',
+  },
+  form: {
+    type: '类型',
+    matcher: {
+      title: '匹配器',
+      pattern: '匹配模式',
+      patternPlaceholder: '/api',
+      hostPatterns: '主机匹配模式',
+      methods: '方法',
+    },
+    target: {
+      title: '目标',
+      serviceId: '服务 ID',
+      rootPath: '根路径',
+      handlerId: '处理器 ID',
+    },
+    forwarding: {
+      title: '转发',
+      mode: '模式',
+      replaceTemplate: '替换模板',
+      priority: '优先级',
+    },
+    advanced: {
+      title: '高级设置',
+      requestHeaderRewrites: '请求头重写',
+      responseHeaderRewrites: '响应头重写',
+      headerNamePlaceholder: '请求头名称',
+      valuePlaceholder: '值',
+      remove: '移除',
+      addRequestRewrite: '添加 request rewrite',
+      addResponseRewrite: '添加 response rewrite',
+      metadataJson: 'metadataJson',
+      maxRequestBodyBytes: '最大请求体字节数',
+      maxRequestHeaderBytes: '最大请求头字节数',
+      maxConcurrentRequests: '最大并发请求数',
+      requestReadTimeoutMs: '请求读取超时（毫秒）',
+    },
+  },
+  navigation: {
+    previous: '上一步',
+    next: '下一步',
+  },
+  confirm: {
+    deleteRoute: '确定删除此路由？',
+  },
+} as const

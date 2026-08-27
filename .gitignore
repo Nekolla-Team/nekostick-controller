@@ -486,3 +486,5 @@ $RECYCLE.BIN/
 .orca
 .omp
 .test-run/
+# WebUI build output
+webui/dist/
