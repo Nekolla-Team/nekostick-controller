@@ -13,6 +13,7 @@ export const app = {
     address: 'Address: {label}',
     hint: 'The API key is only stored in the local connection settings and is never shown here.',
     open: 'Open connection settings',
+    editControllerConfig: 'Edit controller configuration',
   },
   theme: {
     label: 'Theme',
@@ -28,7 +29,7 @@ export const app = {
   bootstrapBanner: {
     title: 'Controller is in bootstrap mode',
     body: 'The controller is running on a temporary HostRoute with a one-time random key. Configure a permanent key in the extension settings first, then enable and configure a production listener in Global Settings.',
-    openGlobalSettings: 'Open global settings',
+    editControllerConfig: 'Edit controller configuration',
     openConnect: 'Connection',
   },
   connectionLost: {

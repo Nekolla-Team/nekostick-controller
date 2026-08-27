@@ -13,6 +13,7 @@ export const app = {
     address: '连接地址: {label}',
     hint: 'API key 仅保存在本地连接设置中, 不会显示在此处。',
     open: '打开连接设置',
+    editControllerConfig: '修改控制器配置',
   },
   theme: {
     label: '主题',
@@ -28,7 +29,7 @@ export const app = {
   bootstrapBanner: {
     title: '控制器处于引导模式',
     body: '控制器正在临时 HostRoute 上运行, 并使用一次性随机 key。请先在扩展设置中配置永久 key, 再在全局设置中启用并配置正式 listener。',
-    openGlobalSettings: '打开全局设置',
+    editControllerConfig: '更改控制器配置',
     openConnect: '连接设置',
   },
   connectionLost: {

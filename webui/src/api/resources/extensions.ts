@@ -15,6 +15,8 @@ function settingsPath(id: string): string {
   return `${extensionPath(id)}/settings`;
 }
 
+export const extensionSettingsPath = settingsPath;
+
 export function listExtensions(): Promise<ExtensionRecord[]> {
   return readResource<ExtensionRecord[]>(extensionsPath);
 }

@@ -3,6 +3,7 @@ import { app } from './app'
 import { common } from './common'
 import { errors } from './errors'
 import { connect } from './connect'
+import { controllerConfig } from './controllerConfig'
 import { dashboard } from './dashboard'
 import { extensions } from './extensions'
 import { globalSettings } from './globalSettings'
@@ -17,6 +18,7 @@ export const enUS: Widen<typeof zhCN> = {
   common,
   errors,
   connect,
+  controllerConfig,
   dashboard,
   extensions,
   globalSettings,

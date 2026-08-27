@@ -23,6 +23,7 @@ import {
 } from 'naive-ui'
 import type { DropdownOption, MenuOption } from 'naive-ui'
 import BootstrapBanner from './components/BootstrapBanner.vue'
+import ControllerConfigModal from './components/ControllerConfigModal.vue'
 import ConnectionLostBanner from './components/ConnectionLostBanner.vue'
 import { getState } from './api/resources/controller'
 import type { ControllerState } from './api/types'
@@ -34,6 +35,7 @@ const router = useRouter()
 const route = useRoute()
 const queryClient = useQueryClient()
 const connectionModal = ref(false)
+const controllerConfigModal = ref(false)
 const controllerStateQuery = useQuery({
   queryKey: ['controller', 'state'],
   queryFn: getState,
@@ -119,6 +121,10 @@ function goToConnection(): void {
   connectionModal.value = false
   void router.push('/connect')
 }
+function openControllerConfig(): void {
+  connectionModal.value = false
+  controllerConfigModal.value = true
+}
 
 async function retryControllerState(): Promise<void> {
   await controllerStateQuery.refetch()
@@ -158,7 +164,7 @@ async function retryControllerState(): Promise<void> {
           </n-layout-header>
           <n-layout-content class="app-content">
             <n-space vertical size="small">
-              <BootstrapBanner :state="controllerState" />
+              <BootstrapBanner :state="controllerState" @edit-config="openControllerConfig" />
               <ConnectionLostBanner
                 :error="controllerError"
                 :fetching="controllerFetching"
@@ -177,9 +183,13 @@ async function retryControllerState(): Promise<void> {
           >
             <p>{{ t('app.connection.address', { label: displayedConnectionLabel }) }}</p>
             <p class="connection-hint">{{ t('app.connection.hint') }}</p>
-            <n-button type="primary" @click="goToConnection">{{ t('app.connection.open') }}</n-button>
+            <n-space>
+              <n-button type="primary" @click="goToConnection">{{ t('app.connection.open') }}</n-button>
+              <n-button @click="openControllerConfig">{{ t('app.connection.editControllerConfig') }}</n-button>
+            </n-space>
           </n-card>
         </n-modal>
+        <ControllerConfigModal v-model:show="controllerConfigModal" />
       </n-dialog-provider>
     </n-message-provider>
   </n-config-provider>
