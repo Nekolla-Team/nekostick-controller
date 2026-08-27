@@ -236,8 +236,17 @@ async function retryControllerState(): Promise<void> {
   padding: 24px;
 }
 
-.connection-hint {
+.connection-modal-card p {
+  margin: 0;
+}
+
+.connection-modal-card .connection-hint {
   color: var(--n-text-color-3);
+  margin: 8px 0 24px;
+}
+
+.connection-modal-card :deep(.n-card-content) {
+  padding-bottom: 24px;
 }
 
 .connection-modal-card {
