@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.DependencyInjection;
 using Nekolla.Nekostick.Controller.Management;
 
 namespace Nekolla.Nekostick.Controller.Adapters.HttpUnix;
@@ -272,10 +273,21 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
         IControllerManagementDispatcher dispatcher,
         ControllerOptions options)
     {
+        // CORS only matters for browser clients of the HTTP listener; the Unix socket transport
+        // is unreachable from browsers, so preflight handling stays disabled there.
+        var corsOrigins = _transport == ControllerTransport.HttpJson
+            ? options.CorsAllowedOrigins
+            : ImmutableArray<string>.Empty;
+
         var builder = new HostBuilder()
             .ConfigureWebHostDefaults(webBuilder =>
             {
                 webBuilder.ConfigureAppConfiguration((_, configuration) => configuration.Sources.Clear());
+                if (!corsOrigins.IsEmpty)
+                {
+                    webBuilder.ConfigureServices(services => services.AddCors());
+                }
+
                 webBuilder.UseKestrel(kestrel =>
                 {
                     kestrel.Limits.MaxRequestBodySize = ControllerAdmissionLimits.MaximumRequestBodyBytes;
@@ -286,6 +298,32 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
                 });
                 webBuilder.Configure(application =>
                 {
+                    if (!corsOrigins.IsEmpty)
+                    {
+                        // Preflight OPTIONS is answered by the middleware before the terminal
+                        // handler, so cross-origin probes never reach the API key check.
+                        application.UseCors(policy =>
+                        {
+                            if (corsOrigins.Contains("*", StringComparer.Ordinal))
+                            {
+                                policy.AllowAnyOrigin();
+                            }
+                            else
+                            {
+                                policy.WithOrigins(corsOrigins.ToArray());
+                            }
+
+                            policy.WithMethods("GET", "POST", "PUT", "DELETE", "PATCH");
+                            policy.WithHeaders(
+                                "Content-Type",
+                                ControllerManagementApiContract.IfMatchHeaderName,
+                                ControllerManagementApiContract.ApiKeyHeaderName);
+                            policy.WithExposedHeaders(
+                                ControllerManagementApiContract.ETagHeaderName,
+                                ControllerManagementApiContract.LocationHeaderName);
+                        });
+                    }
+
                     application.Run(context => HandleRequestAsync(context, dispatcher));
                 });
             });

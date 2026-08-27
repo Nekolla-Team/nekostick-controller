@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -79,7 +80,10 @@ public enum ControllerOptionsError
     HostRoutePathInvalid,
 
     /// <summary>The Unix socket mode is not exactly owner read/write only.</summary>
-    UnixSocketModeInvalid
+    UnixSocketModeInvalid,
+
+    /// <summary>A configured CORS origin is not an exact scheme://host[:port] origin.</summary>
+    CorsOriginInvalid
 }
 
 /// <summary>Contains a safe validation result without echoing configuration or secrets.</summary>
@@ -167,6 +171,12 @@ public sealed class ControllerOptions
 
     /// <summary>Gets the explicitly selected management capability groups.</summary>
     public ControllerApiScope ApiScope { get; init; } = ControllerApiScope.FullConfiguration;
+    /// <summary>
+    /// Gets the browser origins allowed to call the HTTP/JSON listener cross-origin. Empty
+    /// disables CORS entirely; <c>*</c> allows any origin. Every other entry must be an exact
+    /// <c>scheme://host[:port]</c> origin without path, query, fragment, or credentials.
+    /// </summary>
+    public ImmutableArray<string> CorsAllowedOrigins { get; init; } = ImmutableArray<string>.Empty;
 
     /// <summary>Gets whether any protected transport has been explicitly enabled.</summary>
     public bool RequiresApiKey =>
@@ -251,7 +261,10 @@ public sealed class ControllerOptions
                 UnixSocketPath = document.UnixSocketPath,
                 UnixSocketMode = document.UnixSocketMode,
                 ApiKey = document.ApiKey,
-                ApiScope = document.ApiScope
+                ApiScope = document.ApiScope,
+                CorsAllowedOrigins = document.CorsAllowedOrigins is { Length: > 0 } corsOrigins
+                    ? ImmutableArray.CreateRange(corsOrigins)
+                    : ImmutableArray<string>.Empty
             };
 
             return true;
@@ -304,6 +317,11 @@ public sealed class ControllerOptions
             }
         }
 
+        if (CorsAllowedOrigins.Any(static origin => !IsValidCorsOrigin(origin)))
+        {
+            return ControllerOptionsValidationResult.Invalid(ControllerOptionsError.CorsOriginInvalid);
+        }
+
         if (EnableHostRoute && string.IsNullOrWhiteSpace(HostRoutePath))
         {
             return ControllerOptionsValidationResult.Invalid(ControllerOptionsError.HostRoutePathRequired);
@@ -353,6 +371,24 @@ public sealed class ControllerOptions
         return ControllerOptionsValidationResult.Valid;
     }
 
+    private static bool IsValidCorsOrigin(string origin)
+    {
+        if (string.Equals(origin, "*", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return origin.Length is > 0 and <= 255 &&
+            !origin.EndsWith('/') &&
+            Uri.TryCreate(origin, UriKind.Absolute, out var uri) &&
+            (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) &&
+            !string.IsNullOrEmpty(uri.Host) &&
+            string.IsNullOrEmpty(uri.UserInfo) &&
+            string.Equals(uri.AbsolutePath, "/", StringComparison.Ordinal) &&
+            string.IsNullOrEmpty(uri.Query) &&
+            string.IsNullOrEmpty(uri.Fragment);
+    }
+
     private static bool IsStrongApiKey(string? key) =>
         !string.IsNullOrWhiteSpace(key) &&
         key.Length >= MinimumApiKeyLength &&
@@ -396,6 +432,8 @@ public sealed class ControllerOptions
 
         [JsonPropertyName("apiScope")]
         public ControllerApiScope ApiScope { get; init; } = ControllerApiScope.FullConfiguration;
+        [JsonPropertyName("corsAllowedOrigins")]
+        public string[]? CorsAllowedOrigins { get; init; }
     }
 
     private static readonly JsonSerializerOptions SettingsJsonOptions = new()

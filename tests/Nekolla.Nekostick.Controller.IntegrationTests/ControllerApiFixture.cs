@@ -23,6 +23,7 @@ public sealed class ControllerApiFixture : IAsyncLifetime
 {
     public const string ApiKey = "integration-test-key-0123456789abcdef";
     public const string HostRoutePrefix = "/it-controller";
+    public const string CorsOrigin = "http://localhost:5173";
     public const string TestExtensionId = "nekolla.nekostick.test-extension";
 
     private readonly ConcurrentBag<GrpcChannel> _grpcChannels = new();
@@ -66,7 +67,8 @@ public sealed class ControllerApiFixture : IAsyncLifetime
                 unixSocketMode = ControllerOptions.RequiredUnixSocketMode,
                 hostRoutePath = HostRoutePrefix,
                 apiKey = ApiKey,
-                apiScope = ControllerApiScope.FullConfiguration
+                apiScope = ControllerApiScope.FullConfiguration,
+                corsAllowedOrigins = new[] { CorsOrigin }
             }, new JsonSerializerOptions { Converters = { new JsonStringEnumConverter() } }),
             version: 1);
         if (!ControllerOptions.TryParseHostSettings(settings, out var parsed) || parsed is null || !parsed.Validate().IsValid)
@@ -120,7 +122,8 @@ public sealed class ControllerApiFixture : IAsyncLifetime
             EnableHostRoute = true,
             HostRoutePath = HostRoutePrefix,
             ApiKey = ApiKey,
-            ApiScope = ControllerApiScope.FullConfiguration
+            ApiScope = ControllerApiScope.FullConfiguration,
+            CorsAllowedOrigins = ImmutableArray.Create(CorsOrigin)
         };
 
         _entrypoint = new ControllerEntrypoint(options);
@@ -215,7 +218,8 @@ public sealed class ControllerApiFixture : IAsyncLifetime
         string method,
         string path,
         string? jsonBody = null,
-        bool withApiKey = true)
+        bool withApiKey = true,
+        IEnumerable<KeyValuePair<string, string>>? extraHeaders = null)
     {
         var handler = Registration.Handler ?? throw new InvalidOperationException("The HostRoute handler is not registered.");
         var headers = ImmutableDictionary<string, IEnumerable<string>>.Empty
@@ -223,6 +227,14 @@ public sealed class ControllerApiFixture : IAsyncLifetime
         if (withApiKey)
         {
             headers = headers.Add(ControllerManagementApiContract.ApiKeyHeaderName, ImmutableArray.Create(ApiKey));
+        }
+
+        if (extraHeaders is not null)
+        {
+            foreach (var (name, value) in extraHeaders)
+            {
+                headers = headers.Add(name, ImmutableArray.Create(value));
+            }
         }
 
         var body = jsonBody is null ? ReadOnlyMemory<byte>.Empty : Encoding.UTF8.GetBytes(jsonBody).AsMemory();
