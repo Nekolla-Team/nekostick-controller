@@ -79,6 +79,12 @@ export function saveConnection(baseUrl: string | null, apiKey: string | null): v
   }
 }
 
+/** Updates the in-memory connection without persisting, for pre-save connectivity checks. */
+export function stageConnection(baseUrl: string | null, apiKey: string | null): void {
+  connection.baseUrl = baseUrl
+  connection.apiKey = apiKey
+}
+
 export function clearConnection(): void {
   connection.baseUrl = null
   connection.apiKey = null
@@ -93,5 +99,12 @@ export function clearConnection(): void {
 export const connectionLabel = computed(() => {
   const { apiKey, baseUrl } = connection
   if (!apiKey) return t('common.notConnected')
-  return baseUrl ? t('common.connectedTo', { baseUrl }) : t('common.connected')
+  if (!baseUrl) return t('common.connected')
+  let origin = baseUrl
+  try {
+    origin = new URL(baseUrl).origin
+  } catch {
+    // Keep the raw value when the configured address is not a valid URL.
+  }
+  return t('common.connectedTo', { baseUrl: origin })
 })

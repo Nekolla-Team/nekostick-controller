@@ -13,7 +13,7 @@ import {
 } from 'naive-ui'
 import { ApiClientError } from '../api/client'
 import { getRoot } from '../api/resources/root'
-import { connection, saveConnection } from '../stores/connection'
+import { connection, saveConnection, stageConnection } from '../stores/connection'
 import { t } from '../i18n'
 
 const router = useRouter()
@@ -32,21 +32,36 @@ async function handleSubmit(): Promise<void> {
 
   submitting.value = true
   errorMessage.value = null
-  saveConnection(baseUrl.value.trim() || null, apiKey.value)
+  const nextBaseUrl = baseUrl.value.trim() || null
+  const nextApiKey = apiKey.value
+  const previousBaseUrl = connection.baseUrl
+  const previousApiKey = connection.apiKey
+  stageConnection(nextBaseUrl, nextApiKey)
 
   try {
     await getRoot()
+    saveConnection(nextBaseUrl, nextApiKey)
     queryClient.clear()
     await router.replace('/')
   } catch (error: unknown) {
+    stageConnection(previousBaseUrl, previousApiKey)
     if (error instanceof ApiClientError) {
-      errorMessage.value = t('connect.failed', {
-        status: error.status ?? 'unknown',
-        code: error.code ?? 'unknown',
-        kind: error.kind,
-      })
+      const reasonKey = `errors.byKind.${error.kind}`
+      const reason = t(reasonKey) === reasonKey ? t('errors.fallback') : t(reasonKey)
+      const detail = [
+        error.status !== undefined ? `HTTP ${error.status}` : null,
+        error.code ?? null,
+        error.message || null,
+      ]
+        .filter((part) => part !== null)
+        .join(' · ')
+      errorMessage.value = detail
+        ? `${t('connect.failed', { reason })}\n${t('connect.failedDetail', { detail })}`
+        : t('connect.failed', { reason })
     } else {
-      errorMessage.value = t('connect.failedUnknown')
+      errorMessage.value = t('connect.failedUnknown', {
+        message: error instanceof Error && error.message !== '' ? error.message : String(error),
+      })
     }
   } finally {
     submitting.value = false
@@ -82,7 +97,7 @@ async function handleSubmit(): Promise<void> {
           >
             {{ t('connect.submit') }}
           </n-button>
-          <n-alert v-if="errorMessage" type="error" :show-icon="true">
+          <n-alert v-if="errorMessage" type="error" :show-icon="true" class="connect-error">
             {{ errorMessage }}
           </n-alert>
           <p class="storage-note">
@@ -106,6 +121,10 @@ async function handleSubmit(): Promise<void> {
 .connect-card {
   max-width: 480px;
   width: 100%;
+}
+
+.connect-error {
+  white-space: pre-line;
 }
 
 .storage-note {

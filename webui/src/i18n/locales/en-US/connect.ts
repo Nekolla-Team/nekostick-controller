@@ -3,7 +3,8 @@ export const connect = {
   baseUrl: 'Base URL',
   apiKey: 'API key',
   submit: 'Connect',
-  failed: 'Connection failed: status={status} code={code} kind={kind}',
-  failedUnknown: 'Connection failed: status=unknown code=unknown kind=network',
+  failed: 'Connection failed: {reason}',
+  failedDetail: 'Details: {detail}',
+  failedUnknown: 'Connection failed: {message}',
   storageNote: "The API key persists in this browser's localStorage.",
 } as const
