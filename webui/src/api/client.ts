@@ -292,7 +292,7 @@ function requestInit(method: string, options: RequestOptions): RequestInit {
     headers['Content-Type'] = options.contentType ?? 'application/json';
   }
 
-  const init: RequestInit = { method, headers };
+  const init: RequestInit = { method, headers, cache: 'no-store' };
   if (options.signal !== undefined) {
     init.signal = options.signal;
   }
