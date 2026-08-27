@@ -64,7 +64,7 @@ function formatDate(value: string | null): string {
         <p class="service-id">{{ serviceId }}</p>
       </div>
     </header>
-    <ApiErrorAlert v-if="runtimeQuery.isError" :error="runtimeQuery.error" />
+    <ApiErrorAlert v-if="runtimeQuery.isError.value" :error="runtimeQuery.error.value" />
     <n-spin :show="runtimeQuery.isLoading.value">
       <n-card v-if="snapshot" :title="t('serviceRuntime.snapshotTitle')">
         <n-space wrap>

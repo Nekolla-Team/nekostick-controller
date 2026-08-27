@@ -148,7 +148,7 @@ const columns = computed<DataTableColumns<ExtensionRecord>>(() => [
         <p>{{ t('extensions.subtitle') }}</p>
       </div>
     </header>
-    <ApiErrorAlert v-if="extensionsQuery.isError" :error="extensionsQuery.error" />
+    <ApiErrorAlert v-if="extensionsQuery.isError.value" :error="extensionsQuery.error.value" />
     <n-spin :show="extensionsQuery.isLoading.value">
       <n-card>
         <n-data-table :columns="columns" :data="rows" :bordered="false" :single-line="false" />
@@ -159,9 +159,9 @@ const columns = computed<DataTableColumns<ExtensionRecord>>(() => [
       <n-drawer-content :title="t('extensions.settings.title')" closable @close="closeSettings">
         <n-spin :show="settingsQuery.isLoading.value">
           <n-space vertical>
-            <ApiErrorAlert v-if="settingsQuery.isError" :error="settingsQuery.error" />
-            <ApiErrorAlert v-if="saveMutation.isError" :error="saveMutation.error" />
-            <ApiErrorAlert v-if="deleteMutation.isError" :error="deleteMutation.error" />
+            <ApiErrorAlert v-if="settingsQuery.isError.value" :error="settingsQuery.error.value" />
+            <ApiErrorAlert v-if="saveMutation.isError.value" :error="saveMutation.error.value" />
+            <ApiErrorAlert v-if="deleteMutation.isError.value" :error="deleteMutation.error.value" />
             <n-input v-model:value="settingsText" type="textarea" :autosize="{ minRows: 12, maxRows: 30 }" spellcheck="false" />
             <n-alert v-if="settingsError" type="error" :show-icon="true">{{ settingsError }}</n-alert>
             <n-space justify="end">

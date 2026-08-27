@@ -357,9 +357,9 @@ const columns = computed<DataTableColumns<RouteDto>>(() => [
       <n-button type="primary" @click="openCreate">{{ t('routes.create') }}</n-button>
     </header>
 
-    <ApiErrorAlert v-if="routesQuery.isError" :error="routesQuery.error" />
-    <ApiErrorAlert v-if="toggleMutation.isError" :error="toggleMutation.error" />
-    <ApiErrorAlert v-if="deleteMutation.isError" :error="deleteMutation.error" />
+    <ApiErrorAlert v-if="routesQuery.isError.value" :error="routesQuery.error.value" />
+    <ApiErrorAlert v-if="toggleMutation.isError.value" :error="toggleMutation.error.value" />
+    <ApiErrorAlert v-if="deleteMutation.isError.value" :error="deleteMutation.error.value" />
     <n-spin :show="routesQuery.isLoading.value">
       <n-card>
         <n-data-table :columns="columns" :data="rows" :bordered="false" :single-line="false" />
@@ -483,7 +483,7 @@ const columns = computed<DataTableColumns<RouteDto>>(() => [
           </n-collapse>
           </div>
 
-          <ApiErrorAlert v-if="saveMutation.isError" :error="saveMutation.error" />
+          <ApiErrorAlert v-if="saveMutation.isError.value" :error="saveMutation.error.value" />
           <n-alert v-if="formError" type="error" :show-icon="true">{{ formError }}</n-alert>
           <n-space justify="end">
             <n-button v-if="currentStep > 1" @click="previousStep">{{ t('routes.navigation.previous') }}</n-button>

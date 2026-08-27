@@ -330,9 +330,9 @@ const columns = computed<DataTableColumns<ServiceDto>>(() => [
       <n-button type="primary" @click="openCreate">{{ t('services.create') }}</n-button>
     </header>
 
-    <ApiErrorAlert v-if="servicesQuery.isError" :error="servicesQuery.error" />
-    <ApiErrorAlert v-if="toggleMutation.isError" :error="toggleMutation.error" />
-    <ApiErrorAlert v-if="deleteMutation.isError" :error="deleteMutation.error" />
+    <ApiErrorAlert v-if="servicesQuery.isError.value" :error="servicesQuery.error.value" />
+    <ApiErrorAlert v-if="toggleMutation.isError.value" :error="toggleMutation.error.value" />
+    <ApiErrorAlert v-if="deleteMutation.isError.value" :error="deleteMutation.error.value" />
     <n-spin :show="servicesQuery.isLoading.value">
       <n-card>
         <n-data-table :columns="columns" :data="rows" :bordered="false" :single-line="false" />
@@ -380,9 +380,9 @@ const columns = computed<DataTableColumns<ServiceDto>>(() => [
     <n-drawer :show="environmentServiceId !== null" :width="560" @update:show="(show) => { if (!show) closeEnvironment() }">
       <n-drawer-content :title="t('services.environment.title')" closable @close="closeEnvironment">
         <n-spin :show="environmentQuery.isLoading.value">
-          <ApiErrorAlert v-if="environmentQuery.isError" :error="environmentQuery.error" />
-          <ApiErrorAlert v-if="saveEnvironmentMutation.isError" :error="saveEnvironmentMutation.error" />
-          <ApiErrorAlert v-if="clearEnvironmentMutation.isError" :error="clearEnvironmentMutation.error" />
+          <ApiErrorAlert v-if="environmentQuery.isError.value" :error="environmentQuery.error.value" />
+          <ApiErrorAlert v-if="saveEnvironmentMutation.isError.value" :error="saveEnvironmentMutation.error.value" />
+          <ApiErrorAlert v-if="clearEnvironmentMutation.isError.value" :error="clearEnvironmentMutation.error.value" />
           <n-alert v-if="environmentError" type="error" :show-icon="true">{{ environmentError }}</n-alert>
           <n-space vertical>
             <n-space v-for="(row, index) in environmentRows" :key="index" align="center" :wrap="false">

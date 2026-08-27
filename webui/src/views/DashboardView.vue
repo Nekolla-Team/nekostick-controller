@@ -83,9 +83,9 @@ function listenerStateText(enabled: boolean, running: boolean): string {
       <n-button type="primary" :loading="reloadPending" @click="reloadMutation.mutate()">{{ t('dashboard.reload.button') }}</n-button>
     </header>
 
-    <ApiErrorAlert v-if="stateQuery.isError" :error="stateQuery.error" />
-    <ApiErrorAlert v-if="rootQuery.isError" :error="rootQuery.error" />
-    <ApiErrorAlert v-if="reloadMutation.isError" :error="reloadMutation.error" />
+    <ApiErrorAlert v-if="stateQuery.isError.value" :error="stateQuery.error.value" />
+    <ApiErrorAlert v-if="rootQuery.isError.value" :error="rootQuery.error.value" />
+    <ApiErrorAlert v-if="reloadMutation.isError.value" :error="reloadMutation.error.value" />
     <n-alert v-if="reloadUncertain" type="warning" :show-icon="true">
       {{ t('dashboard.reload.uncertain') }}
     </n-alert>

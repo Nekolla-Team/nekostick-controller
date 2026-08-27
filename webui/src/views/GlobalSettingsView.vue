@@ -177,11 +177,11 @@ function save(): void {
       <n-button type="primary" :loading="saveMutation.isPending.value" :disabled="!settingsQuery.data.value" @click="save">{{ t('globalSettings.save') }}</n-button>
     </header>
 
-    <ApiErrorAlert v-if="settingsQuery.isError" :error="settingsQuery.error" />
-    <ApiErrorAlert v-if="saveMutation.isError" :error="saveMutation.error" />
+    <ApiErrorAlert v-if="settingsQuery.isError.value" :error="settingsQuery.error.value" />
+    <ApiErrorAlert v-if="saveMutation.isError.value" :error="saveMutation.error.value" />
     <n-alert v-if="formError" type="error" :show-icon="true">{{ formError }}</n-alert>
     <n-spin :show="settingsQuery.isLoading.value">
-      <n-form v-if="settingsQuery.data" label-placement="left" label-width="240">
+      <n-form v-if="settingsQuery.data.value" label-placement="left" label-width="240">
         <n-card :title="t('globalSettings.cards.portAndRequestLimits')">
           <n-form-item :label="t('globalSettings.fields.autoPortRangeStart')"><n-input-number v-model:value="form.autoPortRangeStart" :min="1" :max="65535" /></n-form-item>
           <n-form-item :label="t('globalSettings.fields.autoPortRangeEnd')"><n-input-number v-model:value="form.autoPortRangeEnd" :min="1" :max="65535" /></n-form-item>
