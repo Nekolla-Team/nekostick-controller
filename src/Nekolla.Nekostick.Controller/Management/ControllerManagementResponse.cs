@@ -39,25 +39,28 @@ public sealed class ControllerManagementResponse
     /// <summary>Gets an immutable copy of the response body.</summary>
     public ImmutableArray<byte> Body { get; }
 
+    private static readonly KeyValuePair<string, IEnumerable<string>>[] NoStoreHeader =
+        { new("cache-control", new[] { "no-store" }) };
+
     /// <summary>Creates an empty invalid-request response.</summary>
     public static ControllerManagementResponse InvalidRequest =>
-        new(400, ControllerDispatchCode.InvalidRequest);
+        new(400, ControllerDispatchCode.InvalidRequest, NoStoreHeader);
 
     /// <summary>Creates an empty unavailable response.</summary>
     public static ControllerManagementResponse Unavailable =>
-        new(503, ControllerDispatchCode.Unavailable);
+        new(503, ControllerDispatchCode.Unavailable, NoStoreHeader);
 
     /// <summary>Creates an empty unauthorized response.</summary>
     public static ControllerManagementResponse Unauthorized =>
-        new(401, ControllerDispatchCode.Unauthorized);
+        new(401, ControllerDispatchCode.Unauthorized, NoStoreHeader);
 
     /// <summary>Creates an empty transport-disabled response.</summary>
     public static ControllerManagementResponse TransportDisabled =>
-        new(404, ControllerDispatchCode.TransportDisabled);
+        new(404, ControllerDispatchCode.TransportDisabled, NoStoreHeader);
 
     /// <summary>Creates an empty not-found response.</summary>
     public static ControllerManagementResponse NotFound =>
-        new(404, ControllerDispatchCode.NotFound);
+        new(404, ControllerDispatchCode.NotFound, NoStoreHeader);
 
     private static ImmutableDictionary<string, ImmutableArray<string>> CopyHeaders(
         IEnumerable<KeyValuePair<string, IEnumerable<string>>>? headers)

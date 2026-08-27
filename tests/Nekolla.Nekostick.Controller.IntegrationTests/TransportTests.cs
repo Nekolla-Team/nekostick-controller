@@ -75,6 +75,7 @@ public sealed class TransportTests(ControllerApiFixture fixture) : IClassFixture
 
         Assert.Equal(HttpStatusCode.OK, allowedResponse.StatusCode);
         Assert.Equal(ControllerApiFixture.CorsOrigin, allowedResponse.Headers.GetValues("Access-Control-Allow-Origin").Single());
+        Assert.Equal("no-store", allowedResponse.Headers.GetValues("cache-control").Single());
         Assert.Contains(
             allowedResponse.Headers.GetValues("Access-Control-Expose-Headers"),
             value => value.Split(',').Select(static name => name.Trim()).Contains("etag", StringComparer.OrdinalIgnoreCase));
@@ -93,6 +94,9 @@ public sealed class TransportTests(ControllerApiFixture fixture) : IClassFixture
     {
         var response = await fixture.InvokeHostRouteAsync("GET", ControllerApiFixture.HostRoutePrefix + "/v1");
         Assert.Equal(200, response.StatusCode);
+        Assert.Contains(response.Headers, pair =>
+            string.Equals(pair.Key, "cache-control", StringComparison.OrdinalIgnoreCase) &&
+            pair.Value.Single() == "no-store");
         using (var document = JsonDocument.Parse(response.Body.ToArray()))
         {
             Assert.True(document.RootElement.GetProperty("ok").GetBoolean());

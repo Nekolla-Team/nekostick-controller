@@ -8,20 +8,21 @@ namespace Nekolla.Nekostick.Controller.Management;
 internal static class ControllerManagementResponseBuilder
 {
     private static readonly KeyValuePair<string, IEnumerable<string>> JsonContentType = new("content-type", new[] { "application/json; charset=utf-8" });
+    private static readonly KeyValuePair<string, IEnumerable<string>> NoStore = new("cache-control", new[] { "no-store" });
     internal static ControllerManagementResponse Success(object? data, long version, int statusCode = 200, string? location = null) => Create(statusCode, ControllerDispatchCode.Success, new ControllerResponseEnvelope { Ok = true, Code = "ok", Message = "The operation completed.", Data = data, Version = version }, version, location);
     internal static ControllerManagementResponse SuccessUnversioned(object? data) => Create(200, ControllerDispatchCode.Success, new ControllerResponseEnvelope { Ok = true, Code = "ok", Message = "The operation completed.", Data = data, Version = null });
-    internal static ControllerManagementResponse NoContent(long version) => new(204, ControllerDispatchCode.Success, new[] { JsonContentType, ETag(version) });
+    internal static ControllerManagementResponse NoContent(long version) => new(204, ControllerDispatchCode.Success, new[] { JsonContentType, NoStore, ETag(version) });
     internal static ControllerManagementResponse Error(int statusCode, ControllerDispatchCode dispatchCode, string code, string message) => Create(statusCode, dispatchCode, new ControllerResponseEnvelope { Ok = false, Code = code, Message = message });
     private static ControllerManagementResponse Create(int statusCode, ControllerDispatchCode dispatchCode, ControllerResponseEnvelope envelope, long? version = null, string? location = null)
     {
-        var headers = new List<KeyValuePair<string, IEnumerable<string>>> { JsonContentType };
+        var headers = new List<KeyValuePair<string, IEnumerable<string>>> { JsonContentType, NoStore };
         if (version is { } currentVersion) headers.Add(ETag(currentVersion));
         if (location is not null) headers.Add(new KeyValuePair<string, IEnumerable<string>>(ControllerManagementApiContract.LocationHeaderName, new[] { location }));
         if (ControllerManagementJson.TrySerialize(envelope, out var body)) return new ControllerManagementResponse(statusCode, dispatchCode, headers, body);
         return ResponseTooLarge;
     }
     private static KeyValuePair<string, IEnumerable<string>> ETag(long version) => new(ControllerManagementApiContract.ETagHeaderName, new[] { $"\"{version.ToString(CultureInfo.InvariantCulture)}\"" });
-    private static ControllerManagementResponse ResponseTooLarge => new(503, ControllerDispatchCode.Unavailable, new[] { JsonContentType }, ControllerManagementJson.ResponseTooLargeBody);
+    private static ControllerManagementResponse ResponseTooLarge => new(503, ControllerDispatchCode.Unavailable, new[] { JsonContentType, NoStore }, ControllerManagementJson.ResponseTooLargeBody);
     internal static ControllerManagementResponse FromConfigurationErrors(ImmutableArray<ConfigurationError> errors)
     {
         var error = errors.IsDefaultOrEmpty ? null : errors[0];
