@@ -195,9 +195,33 @@ async function retryControllerState(): Promise<void> {
   </n-config-provider>
 </template>
 
+<style>
+body {
+  margin: 0;
+}
+</style>
+
 <style scoped>
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
+}
+
+.app-shell > :deep(.n-layout-scroll-container) {
+  height: 100%;
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-content {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.app-content :deep(.n-layout-scroll-container) {
+  height: 100%;
+  overflow-y: auto;
+  padding: 24px;
 }
 
 .app-header {
@@ -233,7 +257,7 @@ async function retryControllerState(): Promise<void> {
 }
 
 .app-content {
-  padding: 24px;
+  padding: 0;
 }
 
 .connection-modal-card p {
