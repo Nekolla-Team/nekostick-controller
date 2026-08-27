@@ -24,7 +24,8 @@ import {
   getSettings,
   putSettings,
 } from '../api/resources/extensions'
-import { reloadSettings, reloadSettingsPath } from '../api/resources/controller'
+import { reloadSettings } from '../api/resources/controller'
+import { globalSettingsPath } from '../api/resources/globalSettings'
 import { useCas } from '../composables/useCas'
 import { connection, saveConnection, stageConnection } from '../stores/connection'
 import { t } from '../i18n'
@@ -289,7 +290,15 @@ async function save(): Promise<void> {
         ifMatch,
       ),
     )
-    await cas.run(reloadSettingsPath, (ifMatch) => reloadSettings(ifMatch))
+    try {
+      await cas.run(globalSettingsPath, (ifMatch) => reloadSettings(ifMatch))
+    } catch (error: unknown) {
+      // Reloading recycles the transport carrying this very request; a dropped
+      // connection here means the reload likely applied, so proceed to reconnect.
+      const ignorable =
+        error instanceof ApiClientError && (error.kind === 'network' || error.kind === 'unavailable')
+      if (!ignorable) throw error
+    }
     if (await reconnect(next)) {
       message.success(t('controllerConfig.saved'))
       close()

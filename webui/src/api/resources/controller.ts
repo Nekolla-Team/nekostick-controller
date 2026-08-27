@@ -3,7 +3,7 @@ import type { ControllerState } from '../types';
 import { requireData, rememberVersion } from './helpers';
 
 export const statePath = '/v1/controller/state';
-export const reloadSettingsPath = '/v1/controller/reload-settings';
+const reloadSettingsPath = '/v1/controller/reload-settings';
 
 export async function getState(): Promise<ControllerState> {
   const response = await request<ControllerState>('GET', statePath);
