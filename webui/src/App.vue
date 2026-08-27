@@ -96,6 +96,8 @@ const selectedMenu = computed(() => {
   return route.path
 })
 const displayedConnectionLabel = connectionLabel
+const fullConnectionAddress = computed(() =>
+  connection.apiKey === null ? t('common.notConnected') : (connection.baseUrl ?? window.location.origin))
 
 function navigate(key: string): void {
   void router.push(key)
@@ -181,7 +183,7 @@ async function retryControllerState(): Promise<void> {
             closable
             @close="connectionModal = false"
           >
-            <p>{{ t('app.connection.address', { label: displayedConnectionLabel }) }}</p>
+            <p class="connection-address">{{ t('app.connection.address', { label: fullConnectionAddress }) }}</p>
             <p class="connection-hint">{{ t('app.connection.hint') }}</p>
             <n-space>
               <n-button type="primary" @click="goToConnection">{{ t('app.connection.open') }}</n-button>
@@ -262,6 +264,10 @@ body {
 
 .connection-modal-card p {
   margin: 0;
+}
+
+.connection-address {
+  word-break: break-all;
 }
 
 .connection-modal-card .connection-hint {
