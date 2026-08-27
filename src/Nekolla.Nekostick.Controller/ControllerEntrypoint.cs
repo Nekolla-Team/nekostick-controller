@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Security.Cryptography;
 using Nekolla.Nekostick.Contracts;
 using Nekolla.Nekostick.Controller.Management;
@@ -312,10 +313,10 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
             return null;
         }
 
-        ConfigurationReadResult<HostConfigurationSnapshot> read;
+        ConfigurationReadResult<ExtensionConfigurationSnapshot> read;
         try
         {
-            read = await context.Host.FullConfiguration
+            read = await context.Host.ConfigurationApi
                 .ReadAsync(cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -340,27 +341,61 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
             return null;
         }
 
-        var matchingSettings = snapshot.ExtensionSettings
-            .Where(static settings => string.Equals(
-                settings.ExtensionId,
-                ControllerOptions.ExtensionId,
-                StringComparison.Ordinal))
-            .Take(2)
-            .ToArray();
-        if (matchingSettings.Length == 0)
+        var settings = snapshot.Settings;
+        if (settings is null)
         {
-            ReportDegraded(context, "configuration.missing");
-            return null;
+            var defaultSettings = new ExtensionSettingsConfiguration(
+                ControllerOptions.ExtensionId,
+                ControllerOptions.ConfigurationSchemaVersion,
+                "{}",
+                0);
+            ConfigurationWriteResult write;
+            try
+            {
+                write = await context.Host.ConfigurationApi
+                    .ApplyAsync(
+                        snapshot.Version,
+                        new ExtensionConfigurationChangeSet(
+                            ImmutableArray<ExtensionRouteConfiguration>.Empty,
+                            ImmutableArray<Guid>.Empty,
+                            ImmutableArray<ExtensionServiceConfiguration>.Empty,
+                            ImmutableArray<Guid>.Empty,
+                            defaultSettings),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (InvalidOperationException)
+            {
+                ReportDegraded(context, "configuration.write_failed");
+                return null;
+            }
+            catch (NotSupportedException)
+            {
+                ReportDegraded(context, "configuration.write_failed");
+                return null;
+            }
+
+            if (!write.IsSuccess)
+            {
+                ReportDegraded(context, "configuration.write_failed");
+                return null;
+            }
+
+            settings = defaultSettings;
         }
 
-        if (matchingSettings.Length != 1 ||
-            !ControllerOptions.TryParseHostSettings(matchingSettings[0], out var options))
+        if (!ControllerOptions.TryParseHostSettings(settings, out var options))
         {
             ReportDegraded(context, "configuration.invalid");
             return null;
         }
 
         return options;
+
     }
 
     private static void ReportDegraded(IExtensionStartContext context, string code) =>

@@ -125,7 +125,6 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
         {
             var settings = _snapshot.ExtensionSettings.FirstOrDefault(static value =>
                 string.Equals(value.ExtensionId, ControllerOptions.ExtensionId, StringComparison.Ordinal));
-            settings ??= new ExtensionSettingsConfiguration(ControllerOptions.ExtensionId, 1, "{}", 0);
 
             return new ExtensionConfigurationSnapshot(
                 _snapshot.Version,
