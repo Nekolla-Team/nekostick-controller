@@ -10,8 +10,8 @@ internal sealed class ControllerRuntime
     private ControllerOptions _options;
     private readonly List<IControllerTransportAdapter> _transportAdapters;
     private readonly IExtensionHostBridge? _bridge;
+    private bool _ephemeralBootstrap;
     private ProvisionedHostRouteIdentity? _bootstrapRouteIdentity;
-    private string? _bootstrapOwnershipMarker;
     private bool _staleBootstrapRoutesCleaned;
     private bool _bootstrapRouteCleanupPending;
     private bool _bootstrapRouteProvisioned;
@@ -22,7 +22,7 @@ internal sealed class ControllerRuntime
     private int _state;
 
     internal ControllerRuntime(ControllerManagementDispatcher dispatcher, ControllerOptions options)
-        : this(dispatcher, options, null, null, null)
+        : this(dispatcher, options, null, false, null)
     {
     }
 
@@ -30,20 +30,16 @@ internal sealed class ControllerRuntime
         ControllerManagementDispatcher dispatcher,
         ControllerOptions options,
         IEnumerable<IControllerTransportAdapter>? transportAdapters,
-        string? bootstrapOwnershipMarker = null,
+        bool ephemeralBootstrap = false,
         IExtensionHostBridge? bridge = null)
     {
         ArgumentNullException.ThrowIfNull(dispatcher);
         ArgumentNullException.ThrowIfNull(options);
-        if (bootstrapOwnershipMarker is not null)
-        {
-            ArgumentException.ThrowIfNullOrEmpty(bootstrapOwnershipMarker);
-        }
 
         Dispatcher = dispatcher;
         _options = options;
         _bridge = bridge;
-        _bootstrapOwnershipMarker = bootstrapOwnershipMarker;
+        _ephemeralBootstrap = ephemeralBootstrap;
         _transportAdapters = (transportAdapters ?? CreateDefaultTransportAdapters()).ToList();
         if (_transportAdapters.Any(static adapter => adapter is null))
         {
@@ -56,7 +52,7 @@ internal sealed class ControllerRuntime
     internal bool IsStarted => Volatile.Read(ref _state) == 1;
 
     /// <summary>Gets whether this runtime owns ephemeral bootstrap state.</summary>
-    internal bool IsEphemeralBootstrap => _bootstrapOwnershipMarker is not null;
+    internal bool IsEphemeralBootstrap => _ephemeralBootstrap;
 
     /// <summary>Gets whether the temporary bootstrap route was provisioned successfully.</summary>
     internal bool BootstrapRouteProvisioned => _bootstrapRouteProvisioned;
@@ -106,10 +102,15 @@ internal sealed class ControllerRuntime
         var hostRouteRunning = false;
         if (IsEphemeralBootstrap)
         {
-            if (_bootstrapRouteIdentity is { } identity && _bootstrapOwnershipMarker is { } marker)
+            if (_bootstrapRouteIdentity is { } identity)
             {
                 var route = snapshot.Routes.SingleOrDefault(candidate => candidate.Id == identity.RouteId);
-                hostRouteRunning = route is not null && ControllerManagementCore.IsBootstrapRoute(route, identity, _handlerId ?? ControllerManagementApiContract.HandlerId, marker);
+                var handlerId = _handlerId ?? ControllerManagementApiContract.HandlerId;
+                hostRouteRunning = route is not null &&
+                    route.Target is ExtensionHandlerRouteTargetConfiguration target &&
+                    string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal) &&
+                    route.Matcher.Type == RouteMatcherType.Prefix &&
+                    string.Equals(route.Matcher.Pattern, identity.CanonicalPath, StringComparison.Ordinal);
             }
         }
         else if (options.EnableHostRoute && _handlerId is { } handlerId && options.HostRoutePath is { } path)
@@ -202,9 +203,8 @@ internal sealed class ControllerRuntime
                         }
 
                         _bootstrapRouteCleanupPending = true;
-                        var provisionedIdentity = await Dispatcher.ProvisionHostRouteAsync(
+                        var provisionedIdentity = await Dispatcher.ProvisionBootstrapRouteAsync(
                             _handlerId!,
-                            _bootstrapOwnershipMarker,
                             cancellationToken).ConfigureAwait(false);
                         if (provisionedIdentity is not { } identity)
                         {
@@ -261,9 +261,8 @@ internal sealed class ControllerRuntime
                         }
 
                         _bootstrapRouteCleanupPending = true;
-                        var provisionedIdentity = await Dispatcher.ProvisionHostRouteAsync(
+                        var provisionedIdentity = await Dispatcher.ProvisionBootstrapRouteAsync(
                             handler.HandlerId,
-                            _bootstrapOwnershipMarker,
                             cancellationToken).ConfigureAwait(false);
                         if (provisionedIdentity is not { } identity)
                         {
@@ -506,13 +505,17 @@ internal sealed class ControllerRuntime
 
         if (IsEphemeralBootstrap)
         {
-            if (_bootstrapRouteIdentity is not { } identity || _bootstrapOwnershipMarker is not { } marker)
+            if (_bootstrapRouteIdentity is not { } identity)
             {
                 throw new InvalidOperationException("The bootstrap route ownership proof is unavailable.");
             }
 
             var bootstrapRoute = snapshot.Routes.SingleOrDefault(route => route.Id == identity.RouteId);
-            var bootstrapPresent = bootstrapRoute is not null && ControllerManagementCore.IsBootstrapRoute(bootstrapRoute, identity, _handlerId, marker);
+            var bootstrapPresent = bootstrapRoute is not null &&
+                bootstrapRoute.Target is ExtensionHandlerRouteTargetConfiguration target &&
+                string.Equals(target.HandlerId, _handlerId, StringComparison.Ordinal) &&
+                bootstrapRoute.Matcher.Type == RouteMatcherType.Prefix &&
+                string.Equals(bootstrapRoute.Matcher.Pattern, identity.CanonicalPath, StringComparison.Ordinal);
             if (bootstrapRoute is not null && !bootstrapPresent)
             {
                 throw new InvalidOperationException("The bootstrap route ownership proof no longer matches.");
@@ -523,13 +526,12 @@ internal sealed class ControllerRuntime
                 await Dispatcher.ReplaceBootstrapWithConfiguredHostRouteAsync(
                     _handlerId,
                     identity,
-                    marker,
                     candidate,
                     cancellationToken).ConfigureAwait(false);
                 _bootstrapRouteIdentity = null;
                 _bootstrapRouteProvisioned = false;
                 _bootstrapRouteCleanupPending = false;
-                _bootstrapOwnershipMarker = null;
+                _ephemeralBootstrap = false;
                 _hostRouteRunning = true;
             }
             else
@@ -537,12 +539,11 @@ internal sealed class ControllerRuntime
                 await Dispatcher.RemoveProvisionedHostRouteAsync(
                     _handlerId,
                     identity,
-                    marker,
                     cancellationToken).ConfigureAwait(false);
                 _bootstrapRouteIdentity = null;
                 _bootstrapRouteProvisioned = false;
                 _bootstrapRouteCleanupPending = false;
-                _bootstrapOwnershipMarker = null;
+                _ephemeralBootstrap = false;
                 _hostRouteRunning = false;
             }
 
@@ -719,7 +720,7 @@ internal sealed class ControllerRuntime
         }
         catch
         {
-            // Keep any retained registration, route marker, and remaining resources available for retry.
+            // Keep any retained registration, route identity, and remaining resources available for retry.
             Interlocked.Exchange(ref _state, 1);
             throw;
         }
@@ -805,16 +806,19 @@ internal sealed class ControllerRuntime
             throw new InvalidOperationException("The bootstrap handler identity is unavailable for route cleanup.");
         }
 
-        if (_bootstrapRouteIdentity is not { } identity)
+        if (_bootstrapRouteIdentity is { } identity)
         {
-            throw new InvalidOperationException("The bootstrap route provisioning identity is unavailable for cleanup.");
+            await Dispatcher.RemoveProvisionedHostRouteAsync(
+                _handlerId,
+                identity,
+                cancellationToken).ConfigureAwait(false);
         }
-
-        await Dispatcher.RemoveProvisionedHostRouteAsync(
-            _handlerId,
-            identity,
-            _bootstrapOwnershipMarker!,
-            cancellationToken).ConfigureAwait(false);
+        else
+        {
+            await Dispatcher.CleanupStaleBootstrapRoutesAsync(
+                _handlerId,
+                cancellationToken).ConfigureAwait(false);
+        }
         _bootstrapRouteIdentity = null;
         _bootstrapRouteProvisioned = false;
         _bootstrapRouteCleanupPending = false;

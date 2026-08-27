@@ -17,7 +17,6 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
     private readonly ControllerOptions? _explicitOptions;
     private readonly IControllerManagementHandlerFactory? _handlerFactory;
     private ControllerOptions? _bootstrapOptions;
-    private string? _bootstrapOwnershipMarker;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private ControllerRuntime? _runtime;
     private bool _startupFailed;
@@ -124,14 +123,11 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
                     throw new InvalidOperationException("Controller options are invalid.");
                 }
 
-                var bootstrapMarker = ReferenceEquals(options, _bootstrapOptions)
-                    ? _bootstrapOwnershipMarker
-                    : null;
                 runtime = new ControllerRuntime(
                     new ControllerManagementDispatcher(options, context.Host),
                     options,
                     transportAdapters: null,
-                    bootstrapOwnershipMarker: bootstrapMarker,
+                    ephemeralBootstrap: ReferenceEquals(options, _bootstrapOptions),
                     bridge: context.Host);
                 _runtime = runtime;
                 runtime.Dispatcher.ConfigureRuntimeCallbacks(
@@ -160,9 +156,16 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
                 {
                     if (runtime.HasActiveResources)
                     {
-                        await runtime.StopAsync(
-                            unregisterHandler: false,
-                            cancellationToken: CancellationToken.None).ConfigureAwait(false);
+                        try
+                        {
+                            await runtime.StopAsync(
+                                unregisterHandler: false,
+                                cancellationToken: CancellationToken.None).ConfigureAwait(false);
+                        }
+                        catch
+                        {
+                            // Preserve the original startup failure; retained runtime state allows a later retry.
+                        }
                     }
                 }
                 finally
@@ -183,9 +186,16 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
                 {
                     if (runtime.HasActiveResources)
                     {
-                        await runtime.StopAsync(
-                            unregisterHandler: false,
-                            cancellationToken: CancellationToken.None).ConfigureAwait(false);
+                        try
+                        {
+                            await runtime.StopAsync(
+                                unregisterHandler: false,
+                                cancellationToken: CancellationToken.None).ConfigureAwait(false);
+                        }
+                        catch
+                        {
+                            // Preserve the original startup failure; retained runtime state allows a later retry.
+                        }
                     }
                 }
                 finally
@@ -250,7 +260,6 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
         RandomNumberGenerator.Fill(secretBytes);
         var secret = Convert.ToBase64String(secretBytes);
         CryptographicOperations.ZeroMemory(secretBytes);
-        _bootstrapOwnershipMarker = ControllerOptions.BootstrapOwnershipPrefix + Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
         _bootstrapOptions = new ControllerOptions
         {
             LoopbackOnly = hydratedOptions.LoopbackOnly,

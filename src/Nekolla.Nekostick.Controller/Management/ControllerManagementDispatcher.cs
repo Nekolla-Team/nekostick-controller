@@ -180,25 +180,22 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
     internal ValueTask<ProvisionedHostRouteIdentity?> ProvisionHostRouteAsync(
         string handlerId,
         ControllerOptions options,
-        string? ownershipMarker,
         CancellationToken cancellationToken) =>
-        Volatile.Read(ref _configuration).Core.ProvisionHostRouteAsync(handlerId, options, ownershipMarker, cancellationToken);
+        Volatile.Read(ref _configuration).Core.ProvisionHostRouteAsync(handlerId, options, cancellationToken);
 
-    /// <summary>Provisions an ephemeral private route with an internal ownership marker.</summary>
-    internal ValueTask<ProvisionedHostRouteIdentity?> ProvisionHostRouteAsync(
+    /// <summary>Provisions an ephemeral private route and returns its in-memory ownership identity.</summary>
+    internal ValueTask<ProvisionedHostRouteIdentity?> ProvisionBootstrapRouteAsync(
         string handlerId,
-        string? ownershipMarker,
         CancellationToken cancellationToken) =>
-        Volatile.Read(ref _configuration).Core.ProvisionHostRouteAsync(handlerId, ownershipMarker, cancellationToken);
+        Volatile.Read(ref _configuration).Core.ProvisionBootstrapRouteAsync(handlerId, cancellationToken);
 
     /// <summary>Atomically replaces a verified bootstrap route with a configured route.</summary>
     internal ValueTask ReplaceBootstrapWithConfiguredHostRouteAsync(
         string handlerId,
         ProvisionedHostRouteIdentity identity,
-        string ownershipMarker,
         ControllerOptions options,
         CancellationToken cancellationToken) =>
-        Volatile.Read(ref _configuration).Core.ReplaceBootstrapWithConfiguredHostRouteAsync(handlerId, identity, ownershipMarker, options, cancellationToken);
+        Volatile.Read(ref _configuration).Core.ReplaceBootstrapWithConfiguredHostRouteAsync(handlerId, identity, options, cancellationToken);
 
     /// <summary>Atomically ensures a configured route at its desired path.</summary>
     internal ValueTask EnsureConfiguredHostRouteAsync(
@@ -215,13 +212,12 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
         CancellationToken cancellationToken) =>
         Volatile.Read(ref _configuration).Core.RemoveConfiguredHostRouteAsync(handlerId, canonicalPath, cancellationToken);
 
-    /// <summary>Removes only an identity- and marker-proven private bootstrap route.</summary>
+    /// <summary>Removes only an identity-proven private bootstrap route.</summary>
     internal ValueTask RemoveProvisionedHostRouteAsync(
         string handlerId,
         ProvisionedHostRouteIdentity identity,
-        string ownershipMarker,
         CancellationToken cancellationToken) =>
-        Volatile.Read(ref _configuration).Core.RemoveProvisionedHostRouteAsync(handlerId, identity, ownershipMarker, cancellationToken);
+        Volatile.Read(ref _configuration).Core.RemoveProvisionedHostRouteAsync(handlerId, identity, cancellationToken);
 
     /// <summary>Removes only stale private bootstrap routes for this controller handler.</summary>
     internal ValueTask CleanupStaleBootstrapRoutesAsync(string handlerId, CancellationToken cancellationToken) =>

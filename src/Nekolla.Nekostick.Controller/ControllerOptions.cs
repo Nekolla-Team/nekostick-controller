@@ -122,8 +122,6 @@ public sealed class ControllerOptions
 
     /// <summary>The exact Unix socket file mode required by the local transport.</summary>
     public const int RequiredUnixSocketMode = 0x180; // 0600
-    /// <summary>Identifies the private versioned bootstrap ownership marker format.</summary>
-    internal const string BootstrapOwnershipPrefix = "bootstrap-v1:";
 
     /// <summary>Gets the safe configuration with every external listener disabled.</summary>
     public static ControllerOptions SafeDefaults { get; } = new();

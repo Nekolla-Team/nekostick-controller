@@ -1,7 +1,5 @@
 using System.Collections.Immutable;
 using System.Linq;
-using System.Text;
-using System.Text.Json;
 using Nekolla.Nekostick.Contracts;
 
 namespace Nekolla.Nekostick.Controller.Management;
@@ -11,21 +9,13 @@ internal sealed partial class ControllerManagementCore
     /// <summary>Provisions the private HostRoute bridge route; this is not a public dispatch path.</summary>
     internal async ValueTask ProvisionHostRouteAsync(string handlerId, CancellationToken cancellationToken)
     {
-        _ = await ProvisionHostRouteAsync(handlerId, _options, ownershipMarker: null, cancellationToken).ConfigureAwait(false);
+        _ = await ProvisionHostRouteAsync(handlerId, _options, cancellationToken).ConfigureAwait(false);
     }
-
-    /// <summary>Provisions a private HostRoute with the active options.</summary>
-    internal ValueTask<ProvisionedHostRouteIdentity?> ProvisionHostRouteAsync(
-        string handlerId,
-        string? ownershipMarker,
-        CancellationToken cancellationToken) =>
-        ProvisionHostRouteAsync(handlerId, _options, ownershipMarker, cancellationToken);
 
     /// <summary>Provisions a private HostRoute using candidate options during reconciliation.</summary>
     internal async ValueTask<ProvisionedHostRouteIdentity?> ProvisionHostRouteAsync(
         string handlerId,
         ControllerOptions options,
-        string? ownershipMarker,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -34,51 +24,47 @@ internal sealed partial class ControllerManagementCore
         if (!HasFullConfigurationScope(options) || !ExtensionAbi.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
 
         var path = options.HostRoutePath ?? throw new InvalidOperationException("The Host route path is unavailable.");
-        if (ownershipMarker is null)
-        {
-            var ownerRead = await bridge.ConfigurationApi.ReadAsync(cancellationToken).ConfigureAwait(false);
-            if (!ownerRead.IsSuccess || ownerRead.Value is not { } ownerSnapshot) throw new InvalidOperationException("The controller route configuration is unavailable.");
-            var handlerRoutes = ownerSnapshot.Routes.Where(route => route.Target is ExtensionHandlerRouteTarget target && string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal)).ToArray();
-            if (handlerRoutes.Length > 1) throw new InvalidOperationException("Duplicate controller handler routes are configured.");
-            if (ownerSnapshot.Routes.Any(route => string.Equals(route.Matcher.Pattern, path, StringComparison.Ordinal) && (route.Target is not ExtensionHandlerRouteTarget target || !string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal)))) throw new InvalidOperationException("The configured controller route is already owned by another target.");
-            var existing = handlerRoutes.SingleOrDefault();
-            var route = new ExtensionRouteConfiguration(existing?.Id ?? Guid.CreateVersion7(), true, new RouteMatcherConfiguration(RouteMatcherType.Prefix, path, ImmutableArray<string>.Empty, ImmutableArray<string>.Empty), new ExtensionHandlerRouteTarget(handlerId), int.MaxValue);
-            if (existing is not null && existing.Enabled == route.Enabled && existing.Priority == route.Priority && existing.Matcher.Type == route.Matcher.Type && string.Equals(existing.Matcher.Pattern, route.Matcher.Pattern, StringComparison.Ordinal) && existing.Matcher.HostPatterns.SequenceEqual(route.Matcher.HostPatterns) && existing.Matcher.Methods.SequenceEqual(route.Matcher.Methods)) return null;
-            var ownerChanges = new ExtensionConfigurationChangeSet(ImmutableArray.Create(route), ImmutableArray<Guid>.Empty, ImmutableArray<ExtensionServiceConfiguration>.Empty, ImmutableArray<Guid>.Empty, settings: null);
-            var ownerWrite = await bridge.ConfigurationApi.ApplyAsync(ownerSnapshot.Version, ownerChanges, cancellationToken).ConfigureAwait(false);
-            if (!ownerWrite.IsSuccess) throw new InvalidOperationException("The controller route could not be provisioned.");
-            return null;
-        }
+        var ownerRead = await bridge.ConfigurationApi.ReadAsync(cancellationToken).ConfigureAwait(false);
+        if (!ownerRead.IsSuccess || ownerRead.Value is not { } ownerSnapshot) throw new InvalidOperationException("The controller route configuration is unavailable.");
+        var handlerRoutes = ownerSnapshot.Routes.Where(route => route.Target is ExtensionHandlerRouteTarget target && string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal)).ToArray();
+        if (handlerRoutes.Length > 1) throw new InvalidOperationException("Duplicate controller handler routes are configured.");
+        if (ownerSnapshot.Routes.Any(route => string.Equals(route.Matcher.Pattern, path, StringComparison.Ordinal) && (route.Target is not ExtensionHandlerRouteTarget target || !string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal)))) throw new InvalidOperationException("The configured controller route is already owned by another target.");
+        var existing = handlerRoutes.SingleOrDefault();
+        var route = new ExtensionRouteConfiguration(existing?.Id ?? Guid.CreateVersion7(), true, new RouteMatcherConfiguration(RouteMatcherType.Prefix, path, ImmutableArray<string>.Empty, ImmutableArray<string>.Empty), new ExtensionHandlerRouteTarget(handlerId), int.MaxValue);
+        if (existing is not null && existing.Enabled == route.Enabled && existing.Priority == route.Priority && existing.Matcher.Type == route.Matcher.Type && string.Equals(existing.Matcher.Pattern, route.Matcher.Pattern, StringComparison.Ordinal) && existing.Matcher.HostPatterns.SequenceEqual(route.Matcher.HostPatterns) && existing.Matcher.Methods.SequenceEqual(route.Matcher.Methods)) return null;
+        var ownerChanges = new ExtensionConfigurationChangeSet(ImmutableArray.Create(route), ImmutableArray<Guid>.Empty, ImmutableArray<ExtensionServiceConfiguration>.Empty, ImmutableArray<Guid>.Empty, settings: null);
+        var ownerWrite = await bridge.ConfigurationApi.ApplyAsync(ownerSnapshot.Version, ownerChanges, cancellationToken).ConfigureAwait(false);
+        if (!ownerWrite.IsSuccess) throw new InvalidOperationException("The controller route could not be provisioned.");
+        return null;
+    }
 
-        ArgumentException.ThrowIfNullOrEmpty(ownershipMarker);
-        if (!ownershipMarker.StartsWith(ControllerOptions.BootstrapOwnershipPrefix, StringComparison.Ordinal) || ownershipMarker.Length <= ControllerOptions.BootstrapOwnershipPrefix.Length)
-        {
-            throw new ArgumentException("The route ownership marker is invalid.", nameof(ownershipMarker));
-        }
-        // Marker-bearing bootstrap routes use the complete Host 1.3 aggregate so cleanup can prove
-        // both the handler identity and the private marker before removing a route.
-        var read = await bridge.FullConfiguration.ReadAsync(cancellationToken).ConfigureAwait(false);
+    /// <summary>Provisions the ephemeral private HostRoute and returns its in-memory ownership identity.</summary>
+    internal async ValueTask<ProvisionedHostRouteIdentity?> ProvisionBootstrapRouteAsync(
+        string handlerId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(handlerId);
+        var options = _options;
+        if (!options.EnableHostRoute) return null;
+        var bridge = _bridge ?? throw new InvalidOperationException("The controller bridge is unavailable.");
+        if (!ExtensionAbi.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
+
+        var path = options.HostRoutePath ?? throw new InvalidOperationException("The Host route path is unavailable.");
+        var read = await bridge.ConfigurationApi.ReadAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) throw new InvalidOperationException("The controller route configuration is unavailable.");
-        var markedRoutes = snapshot.Routes.Where(route => route.Target is ExtensionHandlerRouteTargetConfiguration target && string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal)).ToArray();
-        if (markedRoutes.Length > 1) throw new InvalidOperationException("Duplicate controller handler routes are configured.");
-        if (snapshot.Routes.Any(route => string.Equals(route.Matcher.Pattern, path, StringComparison.Ordinal) && (route.Target is not ExtensionHandlerRouteTargetConfiguration target || !string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal)))) throw new InvalidOperationException("The configured controller route is already owned by another target.");
-        var existingMarked = markedRoutes.SingleOrDefault();
-        var metadataMarker = JsonSerializer.Serialize(new { controller = ControllerOptions.ExtensionId, handler = handlerId, ownership = ownershipMarker }, ControllerManagementJson.Options);
-        if (Encoding.UTF8.GetByteCount(metadataMarker) > ControllerManagementJson.MaximumEmbeddedJsonBytes) throw new ArgumentException("The route ownership marker is too large.", nameof(ownershipMarker));
-        if (existingMarked is not null && !HasOwnershipMarker(existingMarked.MetadataJson, handlerId, ownershipMarker)) throw new InvalidOperationException("The existing controller route is not owned by this bootstrap instance.");
-        var routeId = existingMarked?.Id ?? Guid.CreateVersion7();
-        var identity = new ProvisionedHostRouteIdentity(routeId, path);
-        var stampedRoute = new RouteConfiguration(routeId, true, new RouteMatcherConfiguration(RouteMatcherType.Prefix, path, ImmutableArray<string>.Empty, ImmutableArray<string>.Empty), new ExtensionHandlerRouteTargetConfiguration(handlerId), int.MaxValue, new ForwardingConfiguration(ForwardingMode.Preserve, null), ImmutableArray<HeaderRewriteConfiguration>.Empty, ImmutableArray<HeaderRewriteConfiguration>.Empty, metadataMarker, existingMarked?.CreatedAt ?? DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, existingMarked?.Version ?? 0);
-        if (existingMarked is not null && string.Equals(existingMarked.MetadataJson, metadataMarker, StringComparison.Ordinal) && existingMarked.Enabled && existingMarked.Priority == int.MaxValue && string.Equals(existingMarked.Matcher.Pattern, path, StringComparison.Ordinal)) return identity;
-        var routes = snapshot.Routes.Where(route => existingMarked is null || route.Id != existingMarked.Id).Append(stampedRoute).ToImmutableArray();
-        var changes = new ConfigurationChangeSet(snapshot.GlobalSettings, routes, snapshot.Services, snapshot.ExtensionRecords, snapshot.ExtensionSettings);
-        var write = await bridge.FullConfiguration.ReplaceAsync(snapshot.Version, changes, cancellationToken).ConfigureAwait(false);
+        var handlerRoutes = snapshot.Routes.Where(route => route.Target is ExtensionHandlerRouteTarget target && string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal)).ToArray();
+        if (handlerRoutes.Length != 0) throw new InvalidOperationException("A controller handler route already exists after the stale-route sweep.");
+        if (snapshot.Routes.Any(route => string.Equals(route.Matcher.Pattern, path, StringComparison.Ordinal) && (route.Target is not ExtensionHandlerRouteTarget target || !string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal)))) throw new InvalidOperationException("The configured controller route is already owned by another target.");
+
+        var route = new ExtensionRouteConfiguration(Guid.CreateVersion7(), true, new RouteMatcherConfiguration(RouteMatcherType.Prefix, path, ImmutableArray<string>.Empty, ImmutableArray<string>.Empty), new ExtensionHandlerRouteTarget(handlerId), int.MaxValue);
+        var changes = new ExtensionConfigurationChangeSet(ImmutableArray.Create(route), ImmutableArray<Guid>.Empty, ImmutableArray<ExtensionServiceConfiguration>.Empty, ImmutableArray<Guid>.Empty, settings: null);
+        var write = await bridge.ConfigurationApi.ApplyAsync(snapshot.Version, changes, cancellationToken).ConfigureAwait(false);
         if (!write.IsSuccess) throw new InvalidOperationException("The controller route could not be provisioned.");
-        return identity;
+        return new ProvisionedHostRouteIdentity(route.Id, path);
     }
 
 
-    /// <summary>Removes only stale routes carrying the private bootstrap marker format.</summary>
+    /// <summary>Removes stale bootstrap routes targeting this controller handler.</summary>
     internal async ValueTask CleanupStaleBootstrapRoutesAsync(
         string handlerId,
         CancellationToken cancellationToken)
@@ -86,12 +72,20 @@ internal sealed partial class ControllerManagementCore
         ArgumentException.ThrowIfNullOrEmpty(handlerId);
         var bridge = _bridge ?? throw new InvalidOperationException("The controller bridge is unavailable.");
         if (!HasFullConfigurationScope() || !ExtensionAbi.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
-        var read = await bridge.FullConfiguration.ReadAsync(cancellationToken).ConfigureAwait(false);
+        var read = await bridge.ConfigurationApi.ReadAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) throw new InvalidOperationException("The controller route configuration is unavailable.");
-        var stale = snapshot.Routes.Where(route => route.Target is ExtensionHandlerRouteTargetConfiguration target && string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal) && HasBootstrapOwnershipMarker(route.MetadataJson, handlerId)).ToImmutableHashSet();
-        if (stale.Count == 0) return;
-        var routes = snapshot.Routes.Where(route => !stale.Contains(route)).ToImmutableArray();
-        var write = await bridge.FullConfiguration.ReplaceAsync(snapshot.Version, new ConfigurationChangeSet(snapshot.GlobalSettings, routes, snapshot.Services, snapshot.ExtensionRecords, snapshot.ExtensionSettings), cancellationToken).ConfigureAwait(false);
+        var staleRouteIds = snapshot.Routes
+            .Where(route => route.Target is ExtensionHandlerRouteTarget target && string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal))
+            .Select(route => route.Id)
+            .ToImmutableArray();
+        if (staleRouteIds.Length == 0) return;
+        var changes = new ExtensionConfigurationChangeSet(
+            ImmutableArray<ExtensionRouteConfiguration>.Empty,
+            staleRouteIds,
+            ImmutableArray<ExtensionServiceConfiguration>.Empty,
+            ImmutableArray<Guid>.Empty,
+            settings: null);
+        var write = await bridge.ConfigurationApi.ApplyAsync(snapshot.Version, changes, cancellationToken).ConfigureAwait(false);
         if (!write.IsSuccess) throw new InvalidOperationException("Stale controller bootstrap routes could not be removed.");
     }
 
@@ -99,29 +93,39 @@ internal sealed partial class ControllerManagementCore
     internal async ValueTask ReplaceBootstrapWithConfiguredHostRouteAsync(
         string handlerId,
         ProvisionedHostRouteIdentity identity,
-        string ownershipMarker,
         ControllerOptions options,
         CancellationToken cancellationToken)
     {
-        if (identity.RouteId == Guid.Empty || !ControllerOptions.IsCanonicalManagementPath(identity.CanonicalPath))
+        if (identity.RouteId == Guid.Empty || string.IsNullOrEmpty(identity.CanonicalPath) || !ControllerOptions.IsCanonicalManagementPath(identity.CanonicalPath))
         {
             throw new ArgumentException("The provisioned route identity is invalid.", nameof(identity));
         }
-        ValidateHostRouteTransitionIdentity(handlerId, options, ownershipMarker);
+        ArgumentException.ThrowIfNullOrEmpty(handlerId);
+        ArgumentNullException.ThrowIfNull(options);
+        if (!string.Equals(handlerId, ControllerManagementApiContract.HandlerId, StringComparison.Ordinal) ||
+            !options.EnableHostRoute || options.HostRoutePath is not { } path ||
+            !ControllerOptions.IsCanonicalManagementPath(path))
+        {
+            throw new InvalidOperationException("The HostRoute transition identity is invalid.");
+        }
         var bridge = _bridge ?? throw new InvalidOperationException("The controller bridge is unavailable.");
         if (!HasFullConfigurationScope(options) || !ExtensionAbi.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
-        var path = options.HostRoutePath!;
-        var read = await bridge.FullConfiguration.ReadAsync(cancellationToken).ConfigureAwait(false);
+        var read = await bridge.ConfigurationApi.ReadAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) throw new InvalidOperationException("The controller route configuration is unavailable.");
 
         var bootstrapRoute = snapshot.Routes.SingleOrDefault(route => route.Id == identity.RouteId);
-        if (bootstrapRoute is not null && !IsBootstrapRoute(bootstrapRoute, identity, handlerId, ownershipMarker))
+        if (bootstrapRoute is not null &&
+            (bootstrapRoute.Target is not ExtensionHandlerRouteTarget target ||
+             !string.Equals(target.HandlerId, ControllerManagementApiContract.HandlerId, StringComparison.Ordinal) ||
+             !string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal) ||
+             bootstrapRoute.Matcher.Type != RouteMatcherType.Prefix ||
+             !string.Equals(bootstrapRoute.Matcher.Pattern, identity.CanonicalPath, StringComparison.Ordinal)))
         {
             throw new InvalidOperationException("The bootstrap route ownership proof no longer matches.");
         }
 
         var handlerRoutes = snapshot.Routes.Where(route =>
-            route.Target is ExtensionHandlerRouteTargetConfiguration target &&
+            route.Target is ExtensionHandlerRouteTarget target &&
             string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal)).ToArray();
         var candidateRoute = handlerRoutes.Where(route =>
             route.Matcher.Type == RouteMatcherType.Prefix &&
@@ -129,7 +133,7 @@ internal sealed partial class ControllerManagementCore
         if (candidateRoute.Length > 1) throw new InvalidOperationException("Duplicate configured controller routes are configured.");
         if (snapshot.Routes.Any(route =>
             string.Equals(route.Matcher.Pattern, path, StringComparison.Ordinal) &&
-            (route.Target is not ExtensionHandlerRouteTargetConfiguration target || !string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal))))
+            (route.Target is not ExtensionHandlerRouteTarget target || !string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal))))
         {
             throw new InvalidOperationException("The configured controller route is already owned by another target.");
         }
@@ -144,27 +148,19 @@ internal sealed partial class ControllerManagementCore
             throw new InvalidOperationException("A non-bootstrap controller route already exists.");
         }
 
-        var configuredRoute = new RouteConfiguration(
+        var configuredRoute = new ExtensionRouteConfiguration(
             bootstrapRoute?.Id ?? Guid.CreateVersion7(),
             true,
             new RouteMatcherConfiguration(RouteMatcherType.Prefix, path, ImmutableArray<string>.Empty, ImmutableArray<string>.Empty),
-            new ExtensionHandlerRouteTargetConfiguration(handlerId),
-            int.MaxValue,
-            new ForwardingConfiguration(ForwardingMode.Preserve, null),
-            ImmutableArray<HeaderRewriteConfiguration>.Empty,
-            ImmutableArray<HeaderRewriteConfiguration>.Empty,
-            string.Empty,
-            bootstrapRoute?.CreatedAt ?? DateTimeOffset.UtcNow,
-            DateTimeOffset.UtcNow,
-            bootstrapRoute?.Version ?? 0);
-        var routes = snapshot.Routes
-            .Where(route => bootstrapRoute is null || route.Id != bootstrapRoute.Id)
-            .Append(configuredRoute)
-            .ToImmutableArray();
-        var write = await bridge.FullConfiguration.ReplaceAsync(
-            snapshot.Version,
-            new ConfigurationChangeSet(snapshot.GlobalSettings, routes, snapshot.Services, snapshot.ExtensionRecords, snapshot.ExtensionSettings),
-            cancellationToken).ConfigureAwait(false);
+            new ExtensionHandlerRouteTarget(handlerId),
+            int.MaxValue);
+        var changes = new ExtensionConfigurationChangeSet(
+            ImmutableArray.Create(configuredRoute),
+            ImmutableArray<Guid>.Empty,
+            ImmutableArray<ExtensionServiceConfiguration>.Empty,
+            ImmutableArray<Guid>.Empty,
+            settings: null);
+        var write = await bridge.ConfigurationApi.ApplyAsync(snapshot.Version, changes, cancellationToken).ConfigureAwait(false);
         if (!write.IsSuccess) throw new InvalidOperationException("The configured controller route could not be provisioned.");
     }
 
@@ -193,9 +189,11 @@ internal sealed partial class ControllerManagementCore
         var handlerRoutes = snapshot.Routes.Where(route =>
             route.Target is ExtensionHandlerRouteTargetConfiguration target &&
             string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal)).ToArray();
-        if (handlerRoutes.Any(route => HasBootstrapOwnershipMarker(route.MetadataJson, handlerId)))
+        if (handlerRoutes.Any(route =>
+            !string.Equals(route.Matcher.Pattern, newPath, StringComparison.Ordinal) &&
+            (oldCanonicalPath is null || !string.Equals(route.Matcher.Pattern, oldCanonicalPath, StringComparison.Ordinal))))
         {
-            throw new InvalidOperationException("A bootstrap controller route exists in configured mode.");
+            throw new InvalidOperationException("A controller route exists at an unexpected path.");
         }
 
         var oldMatches = oldCanonicalPath is null
@@ -283,66 +281,36 @@ internal sealed partial class ControllerManagementCore
     internal async ValueTask RemoveProvisionedHostRouteAsync(
         string handlerId,
         ProvisionedHostRouteIdentity identity,
-        string ownershipMarker,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(handlerId);
-        ArgumentException.ThrowIfNullOrEmpty(ownershipMarker);
         if (!string.Equals(handlerId, ControllerManagementApiContract.HandlerId, StringComparison.Ordinal)) throw new InvalidOperationException("The bootstrap handler identity is not fixed.");
-        if (identity.RouteId == Guid.Empty || string.IsNullOrEmpty(identity.CanonicalPath)) throw new ArgumentException("The provisioned route identity is invalid.", nameof(identity));
-        if (!ownershipMarker.StartsWith(ControllerOptions.BootstrapOwnershipPrefix, StringComparison.Ordinal) || ownershipMarker.Length <= ControllerOptions.BootstrapOwnershipPrefix.Length) throw new ArgumentException("The route ownership marker is invalid.", nameof(ownershipMarker));
+        if (identity.RouteId == Guid.Empty || string.IsNullOrEmpty(identity.CanonicalPath) || !ControllerOptions.IsCanonicalManagementPath(identity.CanonicalPath)) throw new ArgumentException("The provisioned route identity is invalid.", nameof(identity));
         var bridge = _bridge ?? throw new InvalidOperationException("The controller bridge is unavailable.");
         if (!HasFullConfigurationScope() || !ExtensionAbi.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
-        var read = await bridge.FullConfiguration.ReadAsync(cancellationToken).ConfigureAwait(false);
+        var read = await bridge.ConfigurationApi.ReadAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) throw new InvalidOperationException("The controller route configuration is unavailable.");
         var candidate = snapshot.Routes.SingleOrDefault(route => route.Id == identity.RouteId);
         if (candidate is null) return;
-        if (candidate.Target is not ExtensionHandlerRouteTargetConfiguration target ||
+        if (candidate.Target is not ExtensionHandlerRouteTarget target ||
             !string.Equals(target.HandlerId, ControllerManagementApiContract.HandlerId, StringComparison.Ordinal) ||
             !string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal) ||
-            !HasOwnershipMarker(candidate.MetadataJson, handlerId, ownershipMarker) ||
             candidate.Matcher.Type != RouteMatcherType.Prefix ||
             !string.Equals(candidate.Matcher.Pattern, identity.CanonicalPath, StringComparison.Ordinal))
         {
             throw new InvalidOperationException("The provisioned controller route ownership proof no longer matches.");
         }
 
-        var routes = snapshot.Routes.Where(route => route.Id != identity.RouteId).ToImmutableArray();
-        var write = await bridge.FullConfiguration.ReplaceAsync(snapshot.Version, new ConfigurationChangeSet(snapshot.GlobalSettings, routes, snapshot.Services, snapshot.ExtensionRecords, snapshot.ExtensionSettings), cancellationToken).ConfigureAwait(false);
+        var changes = new ExtensionConfigurationChangeSet(
+            ImmutableArray<ExtensionRouteConfiguration>.Empty,
+            ImmutableArray.Create(identity.RouteId),
+            ImmutableArray<ExtensionServiceConfiguration>.Empty,
+            ImmutableArray<Guid>.Empty,
+            settings: null);
+        var write = await bridge.ConfigurationApi.ApplyAsync(snapshot.Version, changes, cancellationToken).ConfigureAwait(false);
         if (!write.IsSuccess) throw new InvalidOperationException("The controller route could not be removed.");
     }
 
-    private static void ValidateHostRouteTransitionIdentity(
-        string handlerId,
-        ControllerOptions options,
-        string ownershipMarker)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(handlerId);
-        ArgumentNullException.ThrowIfNull(options);
-        ArgumentException.ThrowIfNullOrEmpty(ownershipMarker);
-        if (!string.Equals(handlerId, ControllerManagementApiContract.HandlerId, StringComparison.Ordinal) ||
-            !options.EnableHostRoute || options.HostRoutePath is not { } path ||
-            !ControllerOptions.IsCanonicalManagementPath(path) ||
-            !ownershipMarker.StartsWith(ControllerOptions.BootstrapOwnershipPrefix, StringComparison.Ordinal) ||
-            ownershipMarker.Length <= ControllerOptions.BootstrapOwnershipPrefix.Length)
-        {
-            throw new InvalidOperationException("The HostRoute transition identity is invalid.");
-        }
-    }
-
-    /// <summary>Verifies the full marker-bearing bootstrap route proof.</summary>
-    internal static bool IsBootstrapRoute(
-        RouteConfiguration route,
-        ProvisionedHostRouteIdentity identity,
-        string handlerId,
-        string ownershipMarker) =>
-        route.Id == identity.RouteId &&
-        route.Target is ExtensionHandlerRouteTargetConfiguration target &&
-        string.Equals(target.HandlerId, ControllerManagementApiContract.HandlerId, StringComparison.Ordinal) &&
-        string.Equals(target.HandlerId, handlerId, StringComparison.Ordinal) &&
-        route.Matcher.Type == RouteMatcherType.Prefix &&
-        string.Equals(route.Matcher.Pattern, identity.CanonicalPath, StringComparison.Ordinal) &&
-        HasOwnershipMarker(route.MetadataJson, handlerId, ownershipMarker);
 
     private static bool IsDesiredConfiguredRoute(RouteConfiguration route, string handlerId, string path) =>
         route.Enabled &&
@@ -359,50 +327,5 @@ internal sealed partial class ControllerManagementCore
         route.ResponseHeaderRewrites.IsDefaultOrEmpty &&
         string.Equals(route.MetadataJson, string.Empty, StringComparison.Ordinal);
 
-    private static bool HasOwnershipMarker(string metadataJson, string handlerId, string ownershipMarker) =>
-        TryReadOwnershipMetadata(metadataJson, out var controllerId, out var metadataHandlerId, out var metadataOwnership) &&
-        string.Equals(controllerId, ControllerOptions.ExtensionId, StringComparison.Ordinal) &&
-        string.Equals(metadataHandlerId, handlerId, StringComparison.Ordinal) &&
-        string.Equals(metadataOwnership, ownershipMarker, StringComparison.Ordinal);
-
-    private static bool HasBootstrapOwnershipMarker(string metadataJson, string handlerId) =>
-        TryReadOwnershipMetadata(metadataJson, out var controllerId, out var metadataHandlerId, out var metadataOwnership) &&
-        string.Equals(controllerId, ControllerOptions.ExtensionId, StringComparison.Ordinal) &&
-        string.Equals(metadataHandlerId, handlerId, StringComparison.Ordinal) &&
-        metadataOwnership is not null &&
-        metadataOwnership.StartsWith(ControllerOptions.BootstrapOwnershipPrefix, StringComparison.Ordinal) &&
-        metadataOwnership.Length > ControllerOptions.BootstrapOwnershipPrefix.Length;
-
-    private static bool TryReadOwnershipMetadata(
-        string metadataJson,
-        out string? controllerId,
-        out string? handlerId,
-        out string? ownershipMarker)
-    {
-        controllerId = null;
-        handlerId = null;
-        ownershipMarker = null;
-        try
-        {
-            using var document = JsonDocument.Parse(metadataJson, new JsonDocumentOptions { MaxDepth = 8, AllowTrailingCommas = false, CommentHandling = JsonCommentHandling.Disallow });
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object ||
-                !root.TryGetProperty("controller", out var controller) || controller.ValueKind != JsonValueKind.String ||
-                !root.TryGetProperty("handler", out var handler) || handler.ValueKind != JsonValueKind.String ||
-                !root.TryGetProperty("ownership", out var ownership) || ownership.ValueKind != JsonValueKind.String)
-            {
-                return false;
-            }
-
-            controllerId = controller.GetString();
-            handlerId = handler.GetString();
-            ownershipMarker = ownership.GetString();
-            return controllerId is not null && handlerId is not null && ownershipMarker is not null;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
 
 }

@@ -16,6 +16,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
     private HostConfigurationSnapshot _snapshot;
     private ImmutableArray<ExtensionServiceRuntimeSnapshot> _supervisorSnapshots = ImmutableArray<ExtensionServiceRuntimeSnapshot>.Empty;
     private ConfigurationError? _nextReplaceFailure;
+    private ConfigurationError? _nextApplyFailure;
 
     public FakeHostBridge(HostConfigurationSnapshot initialSnapshot)
     {
@@ -55,6 +56,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
     public IExtensionLogWriter LogWriter { get; }
 
     public ConcurrentQueue<ExtensionStatus> ReportedStatuses => ((FakeStatusSink)Status).Statuses;
+    public string? LastLogText => ((FakeLogWriter)LogWriter).LastText;
 
     public HostConfigurationSnapshot ReadSnapshot()
     {
@@ -82,6 +84,17 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
         lock (_sync)
         {
             _nextReplaceFailure = new ConfigurationError(code);
+        }
+    }
+    /// <summary>
+    /// Makes the next <see cref="IExtensionConfigurationApi.ApplyAsync"/> call fail once with
+    /// the supplied error without altering the stored snapshot.
+    /// </summary>
+    public void FailNextApply(ConfigurationErrorCode code)
+    {
+        lock (_sync)
+        {
+            _nextApplyFailure = new ConfigurationError(code);
         }
     }
 
@@ -152,6 +165,11 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
     {
         lock (_sync)
         {
+            if (_nextApplyFailure is { } failure)
+            {
+                _nextApplyFailure = null;
+                return ConfigurationWriteResult.Failure(failure);
+            }
             if (expectedVersion != _snapshot.Version)
             {
                 return ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.ConcurrencyConflict));
@@ -417,7 +435,9 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
 
     private sealed class FakeLogWriter : IExtensionLogWriter
     {
-        public void WriteText(ExtensionLogLevel level, string text) { }
+        public string? LastText { get; private set; }
+
+        public void WriteText(ExtensionLogLevel level, string text) => LastText = text;
     }
 
     private sealed class FakeSupervisorApi(FakeHostBridge owner) : IExtensionSupervisorApi
