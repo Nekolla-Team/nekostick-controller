@@ -5,8 +5,6 @@ import {
   NAlert,
   NButton,
   NCard,
-  NCollapse,
-  NCollapseItem,
   NDynamicTags,
   NForm,
   NFormItem,
@@ -181,33 +179,47 @@ function save(): void {
     <ApiErrorAlert v-if="saveMutation.isError.value" :error="saveMutation.error.value" />
     <n-alert v-if="formError" type="error" :show-icon="true">{{ formError }}</n-alert>
     <n-spin :show="settingsQuery.isLoading.value">
-      <n-form v-if="settingsQuery.data.value" label-placement="left" label-width="240">
-        <n-card :title="t('globalSettings.cards.portAndRequestLimits')">
+      <n-form v-if="settingsQuery.data.value" label-placement="left" label-align="left" label-width="240">
+        <n-card class="settings-card" :title="t('globalSettings.cards.serviceEndpointPorts')">
+          <p class="card-hint">{{ t('globalSettings.hints.serviceEndpointPorts') }}</p>
           <n-form-item :label="t('globalSettings.fields.autoPortRangeStart')"><n-input-number v-model:value="form.autoPortRangeStart" :min="1" :max="65535" /></n-form-item>
           <n-form-item :label="t('globalSettings.fields.autoPortRangeEnd')"><n-input-number v-model:value="form.autoPortRangeEnd" :min="1" :max="65535" /></n-form-item>
+        </n-card>
+
+        <n-card class="settings-card" :title="t('globalSettings.cards.portAndRequestLimits')">
+          <p class="card-hint">{{ t('globalSettings.hints.portAndRequestLimits') }}</p>
           <n-form-item :label="t('globalSettings.fields.maxRequestBodyBytes')"><n-input-number v-model:value="form.maxRequestBodyBytes" :min="0" /></n-form-item>
           <n-form-item :label="t('globalSettings.fields.maxRequestHeaderBytes')"><n-input-number v-model:value="form.maxRequestHeaderBytes" :min="0" /></n-form-item>
           <n-form-item :label="t('globalSettings.fields.maxConcurrentRequests')"><n-input-number v-model:value="form.maxConcurrentRequests" :min="0" /></n-form-item>
           <n-form-item :label="t('globalSettings.fields.requestReadTimeout')"><n-input-number v-model:value="form.requestReadTimeoutMs" :min="0" /></n-form-item>
           <n-form-item :label="t('globalSettings.fields.configurationPollInterval')"><n-input-number v-model:value="form.configurationPollIntervalMs" :min="0" /></n-form-item>
-          <n-form-item :label="t('globalSettings.fields.trustedProxyCidrs')"><n-dynamic-tags v-model:value="form.trustedProxyCidrs" /></n-form-item>
+          <n-form-item :label="t('globalSettings.fields.trustedProxyCidrs')">
+            <div class="field-with-hint">
+              <n-dynamic-tags v-model:value="form.trustedProxyCidrs" />
+              <span class="field-hint">{{ t('globalSettings.hints.trustedProxyCidrs') }}</span>
+            </div>
+          </n-form-item>
         </n-card>
 
-        <n-collapse class="settings-collapse">
-          <n-collapse-item :title="t('globalSettings.sections.proxyTimeouts')" name="timeouts">
+        <n-card class="settings-card" :title="t('globalSettings.cards.proxyTimeouts')">
+          <p class="card-hint">{{ t('globalSettings.hints.proxyTimeouts') }}</p>
             <n-form-item :label="t('globalSettings.fields.proxyTimeouts.connectTimeout')"><n-input-number v-model:value="form.proxyTimeouts.connectTimeoutMs" :min="0" /></n-form-item>
             <n-form-item :label="t('globalSettings.fields.proxyTimeouts.httpActivityTimeout')"><n-input-number v-model:value="form.proxyTimeouts.httpActivityTimeoutMs" :min="0" /></n-form-item>
             <n-form-item :label="t('globalSettings.fields.proxyTimeouts.httpTotalTimeout')"><n-input-number v-model:value="form.proxyTimeouts.httpTotalTimeoutMs" :min="0" /></n-form-item>
             <n-form-item :label="t('globalSettings.fields.proxyTimeouts.webSocketIdleTimeout')"><n-input-number v-model:value="form.proxyTimeouts.webSocketIdleTimeoutMs" :min="0" /></n-form-item>
-          </n-collapse-item>
-          <n-collapse-item :title="t('globalSettings.sections.proxyRetries')" name="retries">
+        </n-card>
+
+        <n-card class="settings-card" :title="t('globalSettings.cards.proxyRetries')">
+          <p class="card-hint">{{ t('globalSettings.hints.proxyRetries') }}</p>
             <n-form-item :label="t('globalSettings.fields.proxyRetries.maxRetries')"><n-input-number v-model:value="form.proxyRetries.maxRetries" :min="0" /></n-form-item>
             <n-form-item :label="t('globalSettings.fields.proxyRetries.initialBackoff')"><n-input-number v-model:value="form.proxyRetries.initialBackoffMs" :min="0" /></n-form-item>
             <n-form-item :label="t('globalSettings.fields.proxyRetries.maximumBackoff')"><n-input-number v-model:value="form.proxyRetries.maximumBackoffMs" :min="0" /></n-form-item>
             <n-form-item :label="t('globalSettings.fields.proxyRetries.retryOnConnectionFailure')"><n-switch v-model:value="form.proxyRetries.retryOnConnectionFailure" /></n-form-item>
             <n-form-item :label="t('globalSettings.fields.proxyRetries.retryOnUpstreamDisconnect')"><n-switch v-model:value="form.proxyRetries.retryOnUpstreamDisconnect" /></n-form-item>
-          </n-collapse-item>
-          <n-collapse-item :title="t('globalSettings.sections.clientIpRatePolicy')" name="rate-policy">
+        </n-card>
+
+        <n-card class="settings-card" :title="t('globalSettings.cards.clientIpRatePolicy')">
+          <p class="card-hint">{{ t('globalSettings.hints.clientIpRatePolicy') }}</p>
             <n-form-item :label="t('globalSettings.fields.clientIpRatePolicy.status')">
               <n-radio-group :value="policyConfigured" @update:value="configurePolicy">
                 <n-radio-button :value="true">{{ t('globalSettings.fields.clientIpRatePolicy.configured') }}</n-radio-button>
@@ -232,8 +244,7 @@ function save(): void {
                 </n-radio-group>
               </n-form-item>
             </template>
-          </n-collapse-item>
-        </n-collapse>
+        </n-card>
       </n-form>
     </n-spin>
   </main>
@@ -263,7 +274,25 @@ h1 {
   margin: 6px 0 0;
 }
 
-.settings-collapse {
+.settings-card + .settings-card {
   margin-top: 16px;
+}
+
+.card-hint {
+  color: var(--n-text-color-3);
+  font-size: 13px;
+  margin: 0 0 20px;
+}
+
+.field-with-hint {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.field-hint {
+  color: var(--n-text-color-3);
+  font-size: 12px;
 }
 </style>

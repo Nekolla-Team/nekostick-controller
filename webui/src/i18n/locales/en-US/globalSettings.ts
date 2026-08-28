@@ -1,6 +1,6 @@
 export const globalSettings = {
   title: 'Global settings',
-  subtitle: 'Modify the controller listener, limits, and proxy policies.',
+  subtitle: 'Tune Nekostick Host global inbound limits, outbound proxying behavior, and rate policies.',
   save: 'Save settings',
   saveSuccess: 'Global settings saved',
   errors: {
@@ -11,12 +11,19 @@ export const globalSettings = {
     portRangeBounds: 'Port range must be between 1 and 65535',
   },
   cards: {
-    portAndRequestLimits: 'Port and request limits',
-  },
-  sections: {
+    serviceEndpointPorts: 'Service endpoint port allocation',
+    portAndRequestLimits: 'Inbound connection and request limits',
     proxyTimeouts: 'Proxy timeouts',
     proxyRetries: 'Proxy retries',
     clientIpRatePolicy: 'Client IP rate policy',
+  },
+  hints: {
+    serviceEndpointPorts: 'Port range Nekostick allocates when assigning listening ports to deployed microservices.',
+    portAndRequestLimits: 'Resource ceilings applied when the Nekostick Host accepts external connections and requests.',
+    proxyTimeouts: 'Timeouts used when the Nekostick Host reverse-proxies requests to backend (upstream) services; unrelated to any reverse proxy deployed in front of Nekostick.',
+    proxyRetries: 'Retry behavior when forwarding to backend services fails; applies only to Nekostick\u2019s own proxy.',
+    clientIpRatePolicy: 'Rate limiting by client IP. The client address is taken from trusted proxy forwarding headers; pair with trusted proxy CIDRs.',
+    trustedProxyCidrs: 'CIDR ranges of reverse proxies in front of Nekostick (e.g. Nginx, CDN); forwarding headers such as X-Forwarded-For are only trusted from these ranges.',
   },
   fields: {
     autoPortRangeStart: 'Auto port range start',

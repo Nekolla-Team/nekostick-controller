@@ -1,6 +1,6 @@
 export const globalSettings = {
   title: '全局设置',
-  subtitle: '修改 controller 的 listener、限制和代理策略。',
+  subtitle: '调整 Nekostick Host 的全局入站限制、出站代理行为与速率策略。',
   save: '保存设置',
   saveSuccess: '全局设置已保存',
   errors: {
@@ -11,12 +11,19 @@ export const globalSettings = {
     portRangeBounds: '端口范围必须在 1-65535 之间',
   },
   cards: {
-    portAndRequestLimits: '端口与请求限制',
-  },
-  sections: {
+    serviceEndpointPorts: '服务端点端口分配',
+    portAndRequestLimits: '入站连接与请求限制',
     proxyTimeouts: '代理超时',
     proxyRetries: '代理重试',
     clientIpRatePolicy: '客户端 IP 速率限制策略',
+  },
+  hints: {
+    serviceEndpointPorts: 'Nekostick 为部署的微服务分配监听端口时使用的范围。',
+    portAndRequestLimits: 'Nekostick Host 接受外部连接与请求时的资源上限。',
+    proxyTimeouts: 'Nekostick Host 作为反向代理把请求转发给后端服务（上游）时使用的超时，与 Nekostick 前方的其他反向代理无关。',
+    proxyRetries: '转发到后端服务失败时的重试行为，仅作用于 Nekostick 自身的代理。',
+    clientIpRatePolicy: '按客户端 IP 限流。客户端地址取自受信任的代理转发头，需配合受信任代理 CIDR 使用。',
+    trustedProxyCidrs: '位于 Nekostick 前方的其他反向代理（如 Nginx、CDN）的网段；只有来自这些网段的转发头（如 X-Forwarded-For）才会被采信。',
   },
   fields: {
     autoPortRangeStart: '自动端口范围起始值',
