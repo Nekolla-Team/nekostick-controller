@@ -17,6 +17,8 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
     private ImmutableArray<ExtensionServiceRuntimeSnapshot> _supervisorSnapshots = ImmutableArray<ExtensionServiceRuntimeSnapshot>.Empty;
     private ConfigurationError? _nextReplaceFailure;
     private ConfigurationError? _nextApplyFailure;
+    private ConfigurationError? _nextManagementFailure;
+    private readonly HashSet<string> _runningExtensions = new(StringComparer.Ordinal);
 
     public FakeHostBridge(HostConfigurationSnapshot initialSnapshot)
     {
@@ -36,9 +38,10 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
         Tasks = new FakeTaskScheduler();
         Events = new FakeEventPublisher();
         RouteEvents = new FakeRouteEvents();
+        Management = new FakeManagementApi(this);
     }
 
-    public HostApiVersion ApiVersion { get; } = new(1, 3, 0);
+    public HostApiVersion ApiVersion { get; } = new(1, 3, 1);
     public IExtensionSettingsReader Configuration { get; }
     public IExtensionConfigurationApi ConfigurationApi { get; }
     public IExtensionFullConfigurationApi FullConfiguration { get; }
@@ -54,6 +57,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
     public IExtensionSupervisorApi Supervisor { get; }
     public IExtensionRouteEvents RouteEvents { get; }
     public IExtensionLogWriter LogWriter { get; }
+    public IExtensionManagementApi Management { get; }
 
     public ConcurrentQueue<ExtensionStatus> ReportedStatuses => ((FakeStatusSink)Status).Statuses;
     public string? LastLogText => ((FakeLogWriter)LogWriter).LastText;
@@ -97,6 +101,24 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
             _nextApplyFailure = new ConfigurationError(code);
         }
     }
+    /// <summary>Makes the next <see cref="IExtensionManagementApi"/> call fail once with the supplied error.</summary>
+    public void FailNextManagement(ConfigurationErrorCode code)
+    {
+        lock (_sync)
+        {
+            _nextManagementFailure = new ConfigurationError(code);
+        }
+    }
+
+    /// <summary>Marks an extension as having a running loaded generation for management listings.</summary>
+    public void SetExtensionRunning(string extensionId, bool running)
+    {
+        lock (_sync)
+        {
+            if (running) _runningExtensions.Add(extensionId);
+            else _runningExtensions.Remove(extensionId);
+        }
+    }
 
     public ConfigurationWriteResult ReplaceSnapshot(long expectedVersion, ConfigurationChangeSet changes)
     {
@@ -121,6 +143,53 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
                 changes.ExtensionRecords,
                 changes.ExtensionSettings);
             return ConfigurationWriteResult.Success(_snapshot.Version);
+        }
+    }
+
+    private ConfigurationError? ConsumeManagementFailure()
+    {
+        lock (_sync)
+        {
+            var failure = _nextManagementFailure;
+            _nextManagementFailure = null;
+            return failure;
+        }
+    }
+
+    private ImmutableArray<ExtensionManagementEntry> ReadManagementEntries()
+    {
+        lock (_sync)
+        {
+            return _snapshot.ExtensionRecords.Select(record => new ExtensionManagementEntry(
+                record.ExtensionId, record.Version, record.LoadState, record.CreatedAt, record.UpdatedAt,
+                record.RecordVersion, _runningExtensions.Contains(record.ExtensionId), record.Version)).ToImmutableArray();
+        }
+    }
+
+    private long SetExtensionLoadState(string extensionId, ExtensionLoadState loadState, bool running)
+    {
+        lock (_sync)
+        {
+            var record = _snapshot.ExtensionRecords.First(candidate => string.Equals(candidate.ExtensionId, extensionId, StringComparison.Ordinal));
+            var updated = new ExtensionRecordConfiguration(record.ExtensionId, record.Version, loadState, record.CreatedAt, DateTimeOffset.UtcNow, record.RecordVersion + 1);
+            _snapshot = new HostConfigurationSnapshot(_snapshot.Version + 1, _snapshot.GlobalSettings, _snapshot.Routes, _snapshot.Services,
+                _snapshot.ExtensionRecords.Replace(record, updated), _snapshot.ExtensionSettings);
+            if (running) _runningExtensions.Add(extensionId);
+            else _runningExtensions.Remove(extensionId);
+            return _snapshot.Version;
+        }
+    }
+
+    private long RemoveExtensionRecord(string extensionId)
+    {
+        lock (_sync)
+        {
+            var record = _snapshot.ExtensionRecords.First(candidate => string.Equals(candidate.ExtensionId, extensionId, StringComparison.Ordinal));
+            _snapshot = new HostConfigurationSnapshot(_snapshot.Version + 1, _snapshot.GlobalSettings, _snapshot.Routes, _snapshot.Services,
+                _snapshot.ExtensionRecords.Remove(record),
+                _snapshot.ExtensionSettings.Where(item => !string.Equals(item.ExtensionId, extensionId, StringComparison.Ordinal)).ToImmutableArray());
+            _runningExtensions.Remove(extensionId);
+            return _snapshot.Version;
         }
     }
 
@@ -440,12 +509,82 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
         public void WriteText(ExtensionLogLevel level, string text) => LastText = text;
     }
 
+    private sealed class FakeManagementApi(FakeHostBridge owner) : IExtensionManagementApi
+    {
+        public HostApiVersion ApiVersion => owner.ApiVersion;
+
+        public ValueTask<ConfigurationReadResult<ImmutableArray<ExtensionManagementEntry>>> ListAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (owner.ConsumeManagementFailure() is { } failure)
+                return ValueTask.FromResult(ConfigurationReadResult<ImmutableArray<ExtensionManagementEntry>>.Failure(failure));
+            return ValueTask.FromResult(ConfigurationReadResult<ImmutableArray<ExtensionManagementEntry>>.Success(owner.ReadManagementEntries()));
+        }
+
+        public ValueTask<ConfigurationWriteResult> EnableAsync(string extensionId, CancellationToken cancellationToken) =>
+            Write(extensionId, ExtensionLoadState.Loaded, running: true, cancellationToken);
+
+        public ValueTask<ConfigurationWriteResult> DisableAsync(string extensionId, CancellationToken cancellationToken) =>
+            Write(extensionId, ExtensionLoadState.Disabled, running: false, cancellationToken);
+
+        public ValueTask<ConfigurationWriteResult> ReloadAsync(string extensionId, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (owner.ConsumeManagementFailure() is { } failure) return ValueTask.FromResult(ConfigurationWriteResult.Failure(failure));
+            var entry = owner.ReadManagementEntries().FirstOrDefault(candidate => candidate.ExtensionId == extensionId);
+            if (entry is null) return ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.NotFound)));
+            if (entry.LoadState != ExtensionLoadState.Loaded)
+                return ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.Validation)));
+            return ValueTask.FromResult(ConfigurationWriteResult.Success(owner.ReadSnapshot().Version));
+        }
+
+        public bool ReloadSoon(string extensionId) => true;
+
+        public ValueTask<ConfigurationWriteResult> DeleteRecordAsync(string extensionId, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (owner.ConsumeManagementFailure() is { } failure) return ValueTask.FromResult(ConfigurationWriteResult.Failure(failure));
+            if (owner.ReadManagementEntries().All(candidate => candidate.ExtensionId != extensionId))
+                return ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.NotFound)));
+            return ValueTask.FromResult(ConfigurationWriteResult.Success(owner.RemoveExtensionRecord(extensionId)));
+        }
+
+        public ValueTask<ConfigurationReadResult<ExtensionRefreshSummary>> RequestRefreshAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (owner.ConsumeManagementFailure() is { } failure)
+                return ValueTask.FromResult(ConfigurationReadResult<ExtensionRefreshSummary>.Failure(failure));
+            return ValueTask.FromResult(ConfigurationReadResult<ExtensionRefreshSummary>.Success(
+                new ExtensionRefreshSummary(ImmutableArray<string>.Empty, ImmutableArray<string>.Empty, ImmutableArray<string>.Empty)));
+        }
+
+        private ValueTask<ConfigurationWriteResult> Write(string extensionId, ExtensionLoadState loadState, bool running, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (owner.ConsumeManagementFailure() is { } failure) return ValueTask.FromResult(ConfigurationWriteResult.Failure(failure));
+            if (owner.ReadManagementEntries().All(candidate => candidate.ExtensionId != extensionId))
+                return ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.NotFound)));
+            return ValueTask.FromResult(ConfigurationWriteResult.Success(owner.SetExtensionLoadState(extensionId, loadState, running)));
+        }
+    }
+
     private sealed class FakeSupervisorApi(FakeHostBridge owner) : IExtensionSupervisorApi
     {
         public ValueTask<ConfigurationReadResult<ImmutableArray<ExtensionServiceRuntimeSnapshot>>> ReadAsync(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             return ValueTask.FromResult(ConfigurationReadResult<ImmutableArray<ExtensionServiceRuntimeSnapshot>>.Success(owner.ReadSupervisorSnapshots()));
+        }
+
+        public ValueTask<ConfigurationReadResult<ImmutableArray<ExtensionServiceRuntimeSnapshot>>> ReadForExtensionAsync(string extensionId, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrEmpty(extensionId))
+                return ValueTask.FromResult(ConfigurationReadResult<ImmutableArray<ExtensionServiceRuntimeSnapshot>>.Failure(new ConfigurationError(ConfigurationErrorCode.Validation)));
+            return ValueTask.FromResult(ConfigurationReadResult<ImmutableArray<ExtensionServiceRuntimeSnapshot>>.Success(
+                owner.ReadSupervisorSnapshots()
+                    .Where(snapshot => string.Equals(snapshot.OwnerExtensionId, extensionId, StringComparison.Ordinal))
+                    .ToImmutableArray()));
         }
 
         public ValueTask<ConfigurationReadResult<ExtensionServiceRuntimeSnapshot?>> GetAsync(Guid serviceId, CancellationToken cancellationToken)

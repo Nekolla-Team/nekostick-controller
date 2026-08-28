@@ -152,7 +152,8 @@ public sealed class ServicesApiTests(ControllerApiFixture fixture) : IClassFixtu
             42,
             3,
             now,
-            now - TimeSpan.FromSeconds(1))));
+            now - TimeSpan.FromSeconds(1),
+            "nekolla.nekostick.controller")));
 
         using var list = await client.GetAsync("/v1/services/runtime", cancellationToken);
         Assert.Equal(HttpStatusCode.OK, list.StatusCode);
@@ -169,6 +170,7 @@ public sealed class ServicesApiTests(ControllerApiFixture fixture) : IClassFixtu
         Assert.Equal("Healthy", snapshot.GetProperty("healthState").GetString());
         Assert.Equal(42L, snapshot.GetProperty("forwardedRequestCount").GetInt64());
         Assert.Equal(3L, snapshot.GetProperty("activeForwardedRequestCount").GetInt64());
+        Assert.Equal("nekolla.nekostick.controller", snapshot.GetProperty("ownerExtensionId").GetString());
 
         var runtimePath = $"/v1/services/{serviceId}/runtime";
         using var member = await client.GetAsync(runtimePath, cancellationToken);

@@ -47,7 +47,20 @@ internal static class ControllerContractMapper
         ForwardedRequestCount = source.ForwardedRequestCount,
         ActiveForwardedRequestCount = source.ActiveForwardedRequestCount,
         LastUpdatedAt = source.LastUpdatedAt,
-        LastHealthAt = source.LastHealthAt
+        LastHealthAt = source.LastHealthAt,
+        OwnerExtensionId = source.OwnerExtensionId
+    };
+
+    internal static ControllerExtensionRecordReadDto ToRead(ExtensionManagementEntry source) => new()
+    {
+        ExtensionId = source.ExtensionId, Version = source.InstalledVersion, LoadState = (ControllerExtensionLoadState)source.LoadState,
+        CreatedAt = source.CreatedAt, UpdatedAt = source.UpdatedAt, RecordVersion = source.RecordVersion,
+        IsRunning = source.IsRunning, ManifestVersion = source.ManifestVersion
+    };
+
+    internal static ControllerExtensionRefreshReadDto ToRead(ExtensionRefreshSummary source) => new()
+    {
+        Added = source.Added, VersionUpdated = source.VersionUpdated, Missing = source.Missing
     };
 
     internal static ControllerExtensionRecordReadDto ToRead(ExtensionRecordConfiguration source) => new()

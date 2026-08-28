@@ -19,6 +19,21 @@ public sealed class ControllerExtensionRecordReadDto
     [JsonPropertyName("updatedAt")] public DateTimeOffset UpdatedAt { get; init; }
     /// <summary>Current version of the extension record.</summary>
     [JsonPropertyName("recordVersion")] public long RecordVersion { get; init; }
+    /// <summary>Whether a loaded generation of the extension is currently running.</summary>
+    [JsonPropertyName("isRunning")] public bool IsRunning { get; init; }
+    /// <summary>Manifest version observed by the latest directory scan; null when the manifest is missing.</summary>
+    [JsonPropertyName("manifestVersion")] public string? ManifestVersion { get; init; }
+}
+
+/// <summary>Read representation of an extension directory refresh summary.</summary>
+public sealed class ControllerExtensionRefreshReadDto
+{
+    /// <summary>Extension identifiers added to the persistent records.</summary>
+    [JsonPropertyName("added")] public ImmutableArray<string> Added { get; init; } = ImmutableArray<string>.Empty;
+    /// <summary>Extension identifiers whose installed version was updated.</summary>
+    [JsonPropertyName("versionUpdated")] public ImmutableArray<string> VersionUpdated { get; init; } = ImmutableArray<string>.Empty;
+    /// <summary>Extension identifiers whose manifest was missing from the scan.</summary>
+    [JsonPropertyName("missing")] public ImmutableArray<string> Missing { get; init; } = ImmutableArray<string>.Empty;
 }
 
 /// <summary>Read representation of extension settings.</summary>

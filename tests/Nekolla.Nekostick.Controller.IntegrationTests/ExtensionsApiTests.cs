@@ -2,6 +2,7 @@ using System.Linq;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Nekolla.Nekostick.Contracts;
 using Nekolla.Nekostick.Controller.Management;
 using Xunit;
 
@@ -32,11 +33,11 @@ public sealed class ExtensionsApiTests(ControllerApiFixture fixture) : IClassFix
         using var response = await client.GetAsync($"/v1/extensions/{ControllerApiFixture.TestExtensionId}", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.True(response.Headers.TryGetValues(ControllerManagementApiContract.ETagHeaderName, out _));
+        Assert.False(response.Headers.Contains(ControllerManagementApiContract.ETagHeaderName));
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         var envelope = document.RootElement;
         AssertSuccessfulEnvelope(envelope);
-        Assert.True(envelope.GetProperty("version").GetInt64() >= 2);
+        Assert.Equal(JsonValueKind.Null, envelope.GetProperty("version").ValueKind);
         var extension = envelope.GetProperty("data");
         Assert.Equal(ControllerApiFixture.TestExtensionId, extension.GetProperty("extensionId").GetString());
         Assert.Equal("Loaded", extension.GetProperty("loadState").GetString());
@@ -60,7 +61,7 @@ public sealed class ExtensionsApiTests(ControllerApiFixture fixture) : IClassFix
         var cancellationToken = TestContext.Current.CancellationToken;
         var settingsPath = $"/v1/extensions/{ControllerApiFixture.TestExtensionId}/settings";
 
-        var firstVersion = await ReadEtagAsync(client, "/v1/extensions", cancellationToken);
+        var firstVersion = await ReadEtagAsync(client, "/v1/global-settings", cancellationToken);
         using var firstRequest = CreateJsonRequest(HttpMethod.Put, settingsPath, """{"schemaVersion":1,"settings":{"theme":"dark"}}""", firstVersion);
         using var first = await client.SendAsync(firstRequest, cancellationToken);
         Assert.Equal(HttpStatusCode.OK, first.StatusCode);
@@ -98,7 +99,7 @@ public sealed class ExtensionsApiTests(ControllerApiFixture fixture) : IClassFix
         var cancellationToken = TestContext.Current.CancellationToken;
         const string ghostId = "nekolla.nekostick.ghost";
         var settingsPath = $"/v1/extensions/{ghostId}/settings";
-        var etag = await ReadEtagAsync(client, "/v1/extensions", cancellationToken);
+        var etag = await ReadEtagAsync(client, "/v1/global-settings", cancellationToken);
 
         using var putRequest = CreateJsonRequest(HttpMethod.Put, settingsPath, """{"schemaVersion":1,"settings":{"theme":"dark"}}""", etag);
         using var put = await client.SendAsync(putRequest, cancellationToken);
@@ -123,6 +124,112 @@ public sealed class ExtensionsApiTests(ControllerApiFixture fixture) : IClassFix
         Assert.Equal((HttpStatusCode)428, response.StatusCode);
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         AssertErrorEnvelope(document.RootElement, "precondition_required");
+    }
+
+    [Fact]
+    public async Task ExtensionLifecycle_DisableEnableReloadDelete_RoundTrips()
+    {
+        using var client = fixture.CreateHttpClient();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var memberPath = $"/v1/extensions/{ControllerApiFixture.SpareExtensionId}";
+
+        using var initial = await client.GetAsync(memberPath, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, initial.StatusCode);
+        using var initialDocument = JsonDocument.Parse(await initial.Content.ReadAsStringAsync(cancellationToken));
+        var initialData = initialDocument.RootElement.GetProperty("data");
+        Assert.Equal("Loaded", initialData.GetProperty("loadState").GetString());
+        Assert.False(initialData.GetProperty("isRunning").GetBoolean());
+        Assert.Equal("1.2.0", initialData.GetProperty("manifestVersion").GetString());
+
+        using var disabled = await client.PostAsync($"{memberPath}/disable", content: null, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, disabled.StatusCode);
+        using var afterDisable = await client.GetAsync(memberPath, cancellationToken);
+        using var afterDisableDocument = JsonDocument.Parse(await afterDisable.Content.ReadAsStringAsync(cancellationToken));
+        Assert.Equal("Disabled", afterDisableDocument.RootElement.GetProperty("data").GetProperty("loadState").GetString());
+
+        using var reloadWhileDisabled = await client.PostAsync($"{memberPath}/reload", content: null, cancellationToken);
+        Assert.Equal(HttpStatusCode.BadRequest, reloadWhileDisabled.StatusCode);
+        using var reloadDocument = JsonDocument.Parse(await reloadWhileDisabled.Content.ReadAsStringAsync(cancellationToken));
+        AssertErrorEnvelope(reloadDocument.RootElement, "invalid_request");
+
+        using var enabled = await client.PostAsync($"{memberPath}/enable", content: null, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, enabled.StatusCode);
+        using var afterEnable = await client.GetAsync(memberPath, cancellationToken);
+        using var afterEnableDocument = JsonDocument.Parse(await afterEnable.Content.ReadAsStringAsync(cancellationToken));
+        var enabledData = afterEnableDocument.RootElement.GetProperty("data");
+        Assert.Equal("Loaded", enabledData.GetProperty("loadState").GetString());
+        Assert.True(enabledData.GetProperty("isRunning").GetBoolean());
+
+        using var reloaded = await client.PostAsync($"{memberPath}/reload", content: null, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, reloaded.StatusCode);
+
+        using var deleted = await client.DeleteAsync($"{memberPath}/record", cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
+        using var gone = await client.GetAsync(memberPath, cancellationToken);
+        Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+    }
+
+    [Fact]
+    public async Task ExtensionLifecycle_UnknownId_ReturnsNotFound()
+    {
+        using var client = fixture.CreateHttpClient();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        const string ghostPath = "/v1/extensions/nekolla.nekostick.ghost-lifecycle";
+
+        using var enabled = await client.PostAsync($"{ghostPath}/enable", content: null, cancellationToken);
+        Assert.Equal(HttpStatusCode.NotFound, enabled.StatusCode);
+        using var enableDocument = JsonDocument.Parse(await enabled.Content.ReadAsStringAsync(cancellationToken));
+        AssertErrorEnvelope(enableDocument.RootElement, "not_found");
+
+        using var deleted = await client.DeleteAsync($"{ghostPath}/record", cancellationToken);
+        Assert.Equal(HttpStatusCode.NotFound, deleted.StatusCode);
+    }
+
+    [Fact]
+    public async Task ExtensionLifecycle_WithWrongMethod_ReturnsMethodNotAllowed()
+    {
+        using var client = fixture.CreateHttpClient();
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        using var enable = await client.GetAsync($"/v1/extensions/{ControllerApiFixture.TestExtensionId}/enable", cancellationToken);
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, enable.StatusCode);
+        using var refresh = await client.GetAsync("/v1/extensions/refresh", cancellationToken);
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, refresh.StatusCode);
+    }
+
+    [Fact]
+    public async Task ExtensionsRefresh_ReturnsSummary()
+    {
+        using var client = fixture.CreateHttpClient();
+        using var response = await client.PostAsync("/v1/extensions/refresh", content: null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        var envelope = document.RootElement;
+        AssertSuccessfulEnvelope(envelope);
+        var data = envelope.GetProperty("data");
+        Assert.Empty(data.GetProperty("added").EnumerateArray());
+        Assert.Empty(data.GetProperty("versionUpdated").EnumerateArray());
+        Assert.Empty(data.GetProperty("missing").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task ExtensionLifecycle_WhenManagementFails_MapsErrors()
+    {
+        using var client = fixture.CreateHttpClient();
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        fixture.Host.FailNextManagement(ConfigurationErrorCode.StorageUnavailable);
+        using var listed = await client.GetAsync("/v1/extensions", cancellationToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, listed.StatusCode);
+
+        fixture.Host.FailNextManagement(ConfigurationErrorCode.StorageUnavailable);
+        using var enabled = await client.PostAsync($"/v1/extensions/{ControllerApiFixture.TestExtensionId}/disable", content: null, cancellationToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, enabled.StatusCode);
+
+        fixture.Host.FailNextManagement(ConfigurationErrorCode.StorageUnavailable);
+        using var refreshed = await client.PostAsync("/v1/extensions/refresh", content: null, cancellationToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, refreshed.StatusCode);
     }
 
     private static void AssertSettings(JsonElement envelope, string theme)

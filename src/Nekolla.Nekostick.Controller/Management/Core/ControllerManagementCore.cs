@@ -167,6 +167,12 @@ internal sealed partial class ControllerManagementCore
                 "DELETE" => await DeleteServiceAsync(request, serviceId, cancellationToken).ConfigureAwait(false),
                 _ => ControllerManagementResponseBuilder.MethodNotAllowed
             };
+        if (path == ControllerManagementApiContract.ExtensionsRefreshPath)
+            return method == "POST" ? await RefreshExtensionsAsync(request, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
+
+        if (TryGetExtensionActionPath(path, out var actionExtensionId, out var extensionAction))
+            return await WriteExtensionLifecycleAsync(request, method, actionExtensionId, extensionAction, cancellationToken).ConfigureAwait(false);
+
         if (TryGetExtensionMemberPath(path, out var extensionId))
             return method == "GET" ? await ReadExtensionAsync(request, extensionId, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
 

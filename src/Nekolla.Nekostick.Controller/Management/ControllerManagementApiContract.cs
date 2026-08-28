@@ -25,6 +25,8 @@ public static class ControllerManagementApiContract
     public const string ServiceRuntimePath = "/v1/services/{id}/runtime";
     /// <summary>Path for extension operations.</summary>
     public const string ExtensionsPath = "/v1/extensions";
+    /// <summary>Path of the extension directory refresh endpoint.</summary>
+    public const string ExtensionsRefreshPath = "/v1/extensions/refresh";
     /// <summary>Path for unversioned controller runtime state.</summary>
     public const string StatePath = "/v1/controller/state";
     /// <summary>Path for hot controller settings reload.</summary>

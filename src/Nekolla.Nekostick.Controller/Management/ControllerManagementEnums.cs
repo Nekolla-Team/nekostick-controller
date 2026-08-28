@@ -121,7 +121,9 @@ public enum ControllerExtensionLoadState
     /// <summary>The extension failed to load or run.</summary>
     Failed,
     /// <summary>The extension is being unloaded.</summary>
-    Unloading
+    Unloading,
+    /// <summary>The extension is disabled and never enters the loadable set.</summary>
+    Disabled
 }
 
 /// <summary>Identifies the safe lifecycle state of a supervised service runtime.</summary>

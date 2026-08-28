@@ -53,6 +53,8 @@ public sealed class ControllerServiceRuntimeReadDto
     [JsonPropertyName("lastUpdatedAt")] public DateTimeOffset? LastUpdatedAt { get; init; }
     /// <summary>UTC time of the latest health observation when known.</summary>
     [JsonPropertyName("lastHealthAt")] public DateTimeOffset? LastHealthAt { get; init; }
+    /// <summary>Owning extension identifier; null for Host-owned services.</summary>
+    [JsonPropertyName("ownerExtensionId")] public string? OwnerExtensionId { get; init; }
 }
 
 /// <summary>Write representation for service create/patch. Environment is write-only on create.</summary>

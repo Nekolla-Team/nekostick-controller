@@ -25,6 +25,7 @@ public sealed class ControllerApiFixture : IAsyncLifetime
     public const string HostRoutePrefix = "/it-controller";
     public const string CorsOrigin = "http://localhost:5173";
     public const string TestExtensionId = "nekolla.nekostick.test-extension";
+    public const string SpareExtensionId = "nekolla.nekostick.spare-extension";
 
     private readonly ConcurrentBag<GrpcChannel> _grpcChannels = new();
     private ControllerEntrypoint? _entrypoint;
@@ -100,13 +101,21 @@ public sealed class ControllerApiFixture : IAsyncLifetime
                 proxyRetries: ProxyRetryConfiguration.Default),
             routes: ImmutableArray<RouteConfiguration>.Empty,
             services: ImmutableArray<ServiceConfiguration>.Empty,
-            extensionRecords: ImmutableArray.Create(new ExtensionRecordConfiguration(
-                TestExtensionId,
-                "1.0.0",
-                ExtensionLoadState.Loaded,
-                now,
-                now,
-                recordVersion: 1)),
+            extensionRecords: ImmutableArray.Create(
+                new ExtensionRecordConfiguration(
+                    TestExtensionId,
+                    "1.0.0",
+                    ExtensionLoadState.Loaded,
+                    now,
+                    now,
+                    recordVersion: 1),
+                new ExtensionRecordConfiguration(
+                    SpareExtensionId,
+                    "1.2.0",
+                    ExtensionLoadState.Loaded,
+                    now,
+                    now,
+                    recordVersion: 1)),
             extensionSettings: ImmutableArray.Create(settings)));
 
         var options = new ControllerOptions
