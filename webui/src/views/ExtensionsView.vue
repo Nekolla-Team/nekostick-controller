@@ -13,15 +13,21 @@ import {
   NSpace,
   NSpin,
   NTag,
+  useMessage,
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import ApiErrorAlert from '../components/ApiErrorAlert.vue'
 import {
+  deleteExtensionRecord,
   deleteSettings,
+  disableExtension,
+  enableExtension,
   extensionsPath,
   getSettings,
   listExtensions,
   putSettings,
+  refreshExtensions,
+  reloadExtension,
 } from '../api/resources/extensions'
 import type { ExtensionRecord, ExtensionSettings, JsonObject, JsonValue } from '../api/types'
 import { useCas } from '../composables/useCas'
@@ -29,6 +35,7 @@ import { t } from '../i18n'
 
 const queryClient = useQueryClient()
 const cas = useCas(queryClient)
+const message = useMessage()
 const extensionsQuery = useQuery({ queryKey: ['extensions'], queryFn: listExtensions })
 const rows = computed(() => extensionsQuery.data.value ?? [])
 const selectedExtensionId = ref<string | null>(null)
@@ -126,16 +133,76 @@ function save(): void {
   saveMutation.mutate()
 }
 
+const lifecycleMutation = useMutation({
+  mutationFn: ({ id, action }: { id: string; action: 'enable' | 'disable' | 'reload' | 'deleteRecord' }) => {
+    if (action === 'enable') return enableExtension(id)
+    if (action === 'disable') return disableExtension(id)
+    if (action === 'reload') return reloadExtension(id)
+    return deleteExtensionRecord(id)
+  },
+  onSuccess: async () => {
+    await queryClient.invalidateQueries({ queryKey: ['extensions'] })
+  },
+})
+
+const refreshMutation = useMutation({
+  mutationFn: refreshExtensions,
+  onSuccess: async (summary) => {
+    message.success(t('extensions.refresh.summary', { added: summary.added.length, updated: summary.versionUpdated.length, missing: summary.missing.length }))
+    await queryClient.invalidateQueries({ queryKey: ['extensions'] })
+  },
+})
+
+function loadStateTagType(loadState: ExtensionRecord['loadState']): 'success' | 'error' | 'warning' | 'default' {
+  if (loadState === 'Loaded') return 'success'
+  if (loadState === 'Failed') return 'error'
+  if (loadState === 'Disabled') return 'warning'
+  return 'default'
+}
+
 const columns = computed<DataTableColumns<ExtensionRecord>>(() => [
   { title: t('extensions.columns.extensionId'), key: 'extensionId' },
-  { title: t('extensions.columns.version'), key: 'version' },
   {
-    title: t('extensions.columns.loadState'), key: 'loadState',
-    render: (row) => h(NTag, { type: row.loadState === 'Loaded' ? 'success' : row.loadState === 'Failed' ? 'error' : 'default' }, { default: () => row.loadState }),
+    title: t('extensions.columns.version'), key: 'version',
+    render: (row) => h(NSpace, { size: 4, align: 'center' }, {
+      default: () => [
+        h('span', row.version),
+        row.manifestVersion !== null && row.manifestVersion !== row.version
+          ? h(NTag, { size: 'small', type: 'warning' }, { default: () => t('extensions.columns.manifestDrift', { version: row.manifestVersion ?? '' }) })
+          : null,
+      ],
+    }),
   },
   {
-    title: t('extensions.columns.settings'), key: 'settings', width: 120,
-    render: (row) => h(NButton, { size: 'small', onClick: () => openSettings(row) }, { default: () => t('extensions.columns.editSettings') }),
+    title: t('extensions.columns.loadState'), key: 'loadState',
+    render: (row) => h(NTag, { type: loadStateTagType(row.loadState) }, { default: () => row.loadState }),
+  },
+  {
+    title: t('extensions.columns.running'), key: 'isRunning', width: 90,
+    render: (row) => (row.isRunning ? h(NTag, { size: 'small', type: 'success' }, { default: () => '●' }) : h('span', '—')),
+  },
+  {
+    title: t('extensions.columns.actions'), key: 'actions', width: 320,
+    render: (row) => {
+      const pending = lifecycleMutation.isPending.value
+      const buttons = [
+        h(NButton, { size: 'small', disabled: pending, onClick: () => openSettings(row) }, { default: () => t('extensions.columns.editSettings') }),
+      ]
+      if (row.loadState !== 'Loaded') {
+        buttons.push(h(NButton, { size: 'small', type: 'primary', ghost: true, disabled: pending, onClick: () => lifecycleMutation.mutate({ id: row.extensionId, action: 'enable' }) }, { default: () => t('extensions.columns.enable') }))
+      }
+      if (row.loadState !== 'Disabled') {
+        buttons.push(h(NButton, { size: 'small', disabled: pending, onClick: () => lifecycleMutation.mutate({ id: row.extensionId, action: 'disable' }) }, { default: () => t('extensions.columns.disable') }))
+      }
+      if (row.loadState === 'Loaded') {
+        buttons.push(h(NButton, { size: 'small', disabled: pending, onClick: () => lifecycleMutation.mutate({ id: row.extensionId, action: 'reload' }) }, { default: () => t('extensions.columns.reload') }))
+      }
+      buttons.push(h(NPopconfirm, { onPositiveClick: () => lifecycleMutation.mutate({ id: row.extensionId, action: 'deleteRecord' }) }, {
+        trigger: () => h(NButton, { size: 'small', type: 'error', ghost: true, disabled: pending }, { default: () => t('extensions.columns.deleteRecord') }),
+        default: () => t('extensions.columns.deleteRecordConfirm'),
+      }))
+      return h(NSpace, { size: 4 }, { default: () => buttons })
+    },
   },
 ])
 </script>
@@ -147,8 +214,13 @@ const columns = computed<DataTableColumns<ExtensionRecord>>(() => [
         <h1>{{ t('extensions.title') }}</h1>
         <p>{{ t('extensions.subtitle') }}</p>
       </div>
+      <n-button :loading="refreshMutation.isPending.value" @click="refreshMutation.mutate()">
+        {{ t('extensions.refresh.button') }}
+      </n-button>
     </header>
     <ApiErrorAlert v-if="extensionsQuery.isError.value" :error="extensionsQuery.error.value" />
+    <ApiErrorAlert v-if="lifecycleMutation.isError.value" :error="lifecycleMutation.error.value" />
+    <ApiErrorAlert v-if="refreshMutation.isError.value" :error="refreshMutation.error.value" />
     <n-spin :show="extensionsQuery.isLoading.value">
       <n-card>
         <n-data-table :columns="columns" :data="rows" :bordered="false" :single-line="false" />

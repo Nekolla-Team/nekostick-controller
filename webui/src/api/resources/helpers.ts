@@ -44,3 +44,13 @@ export async function deleteResource(path: string, ifMatch: string): Promise<voi
   const response = await request<null>('DELETE', path, { ifMatch });
   rememberVersion(path, response);
 }
+export async function actionResource(path: string, method: 'POST' | 'DELETE' = 'POST'): Promise<void> {
+  const response = await request<null>(method, path);
+  rememberVersion(path, response);
+}
+
+export async function actionResourceData<T>(path: string): Promise<T> {
+  const response = await request<T>('POST', path);
+  rememberVersion(path, response);
+  return requireData(response);
+}

@@ -26,7 +26,7 @@ export type ServiceRestartPolicy = 'Never' | 'OnFailure' | 'Always';
 export type HealthCheckType = 'Process' | 'Tcp' | 'Http';
 export type RateLimitRejectionBehavior = 'Reject' | 'Queue';
 export type RateLimitRetryAfterBehavior = 'None' | 'FromReplenishmentPeriod';
-export type ExtensionLoadState = 'Discovered' | 'Loaded' | 'Stopped' | 'Failed' | 'Unloading';
+export type ExtensionLoadState = 'Discovered' | 'Loaded' | 'Stopped' | 'Failed' | 'Unloading' | 'Disabled';
 export type ServiceLifecycleState =
   | 'Unknown'
   | 'Disabled'
@@ -285,6 +285,7 @@ export interface ServiceRuntimeSnapshot {
   activeForwardedRequestCount: number;
   lastUpdatedAt: string | null;
   lastHealthAt: string | null;
+  ownerExtensionId: string | null;
 }
 
 export type ServiceRuntimeDto = ServiceRuntimeSnapshot;
@@ -313,6 +314,14 @@ export interface ExtensionRecord {
   createdAt: string;
   updatedAt: string;
   recordVersion: number;
+  isRunning: boolean;
+  manifestVersion: string | null;
+}
+
+export interface ExtensionRefreshSummary {
+  added: string[];
+  versionUpdated: string[];
+  missing: string[];
 }
 
 export interface ExtensionSettings {

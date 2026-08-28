@@ -1,9 +1,10 @@
 import type {
   ExtensionRecord,
+  ExtensionRefreshSummary,
   ExtensionSettings,
   ExtensionSettingsWriteBody,
 } from '../types';
-import { readResource, writeResource, deleteResource } from './helpers';
+import { actionResource, actionResourceData, readResource, writeResource, deleteResource } from './helpers';
 
 export const extensionsPath = '/v1/extensions';
 
@@ -39,6 +40,25 @@ export function putSettings(
 
 export function deleteSettings(id: string, ifMatch: string): Promise<void> {
   return deleteResource(settingsPath(id), ifMatch);
+}
+export function enableExtension(id: string): Promise<void> {
+  return actionResource(`${extensionPath(id)}/enable`);
+}
+
+export function disableExtension(id: string): Promise<void> {
+  return actionResource(`${extensionPath(id)}/disable`);
+}
+
+export function reloadExtension(id: string): Promise<void> {
+  return actionResource(`${extensionPath(id)}/reload`);
+}
+
+export function deleteExtensionRecord(id: string): Promise<void> {
+  return actionResource(`${extensionPath(id)}/record`, 'DELETE');
+}
+
+export function refreshExtensions(): Promise<ExtensionRefreshSummary> {
+  return actionResourceData<ExtensionRefreshSummary>(`${extensionsPath}/refresh`);
 }
 
 export const list = listExtensions;

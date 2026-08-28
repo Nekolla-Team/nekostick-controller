@@ -19,5 +19,6 @@ export const serviceRuntime = {
     startedAt: 'Started at',
     lastUpdatedAt: 'Last updated',
     lastHealthAt: 'Last health check',
+    owner: 'Owner extension',
   },
 } as const

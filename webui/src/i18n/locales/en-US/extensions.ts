@@ -1,12 +1,24 @@
 export const extensions = {
   title: 'Extensions',
-  subtitle: 'Extension records are read-only; extension settings JSON can be edited separately.',
+  subtitle: 'Inspect extension records and runtime state; enable, disable, reload, or manage records.',
   columns: {
     extensionId: 'Extension ID',
     version: 'Version',
     loadState: 'Load state',
+    running: 'Running',
+    manifestDrift: 'On-disk {version}',
+    actions: 'Actions',
     settings: 'Settings',
     editSettings: 'Edit settings',
+    enable: 'Enable',
+    disable: 'Disable',
+    reload: 'Reload',
+    deleteRecord: 'Delete record',
+    deleteRecordConfirm: 'Cascade-delete this extension record, settings, routes, and services? Only works once files are removed.',
+  },
+  refresh: {
+    button: 'Refresh directory',
+    summary: '{added} added, {updated} version-updated, {missing} missing',
   },
   settings: {
     title: 'Extension settings',

@@ -19,5 +19,6 @@ export const serviceRuntime = {
     startedAt: '启动时间',
     lastUpdatedAt: '最后更新时间',
     lastHealthAt: '最近健康检查时间',
+    owner: '属主扩展',
   },
 } as const

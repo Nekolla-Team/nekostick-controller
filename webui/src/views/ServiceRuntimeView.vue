@@ -97,6 +97,9 @@ function formatDate(value: string | null): string {
           <n-descriptions-item :label="t('serviceRuntime.details.lastHealthAt')">
             {{ formatDate(snapshot.lastHealthAt) }}
           </n-descriptions-item>
+          <n-descriptions-item :label="t('serviceRuntime.details.owner')">
+            {{ snapshot.ownerExtensionId ?? t('common.unknown') }}
+          </n-descriptions-item>
         </n-descriptions>
       </n-card>
     </n-spin>

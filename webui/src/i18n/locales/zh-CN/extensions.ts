@@ -1,12 +1,24 @@
 export const extensions = {
   title: '扩展',
-  subtitle: '扩展记录只读；可单独编辑扩展 settings JSON。',
+  subtitle: '查看扩展记录与运行状态，可执行启用、禁用、重载与记录管理。',
   columns: {
     extensionId: '扩展 ID',
     version: '版本',
     loadState: '加载状态',
+    running: '运行中',
+    manifestDrift: '磁盘版本 {version}',
+    actions: '操作',
     settings: '设置',
     editSettings: '编辑设置',
+    enable: '启用',
+    disable: '禁用',
+    reload: '重载',
+    deleteRecord: '删除记录',
+    deleteRecordConfirm: '级联删除该扩展的记录、设置、路由与服务？仅在文件已移除时有效。',
+  },
+  refresh: {
+    button: '刷新目录',
+    summary: '新增 {added} 个，版本更新 {updated} 个，缺失 {missing} 个',
   },
   settings: {
     title: '扩展设置',
