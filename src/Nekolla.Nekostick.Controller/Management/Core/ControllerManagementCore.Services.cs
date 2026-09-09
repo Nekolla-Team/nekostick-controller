@@ -16,7 +16,7 @@ internal sealed partial class ControllerManagementCore
     private async ValueTask<ControllerManagementResponse> ReadServiceRuntimesAsync(ControllerManagementRequest request, CancellationToken cancellationToken)
     {
         if (!RequireNoIfMatch(request) || !RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
-        if (_bridge is not IExtensionHostBridge13 bridge13 || !ExtensionAbi.IsApi13Supported(bridge13.ApiVersion)) return ControllerManagementResponseBuilder.Unsupported;
+        if (_bridge is not IExtensionHostBridge13 bridge13 || !ExtensionHostApiSupport.IsApi13Supported(bridge13.ApiVersion)) return ControllerManagementResponseBuilder.Unsupported;
         var read = await bridge13.Supervisor.ReadAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
         var snapshots = read.Value.IsDefault
@@ -28,7 +28,7 @@ internal sealed partial class ControllerManagementCore
     private async ValueTask<ControllerManagementResponse> ReadServiceRuntimeAsync(ControllerManagementRequest request, Guid serviceId, CancellationToken cancellationToken)
     {
         if (!RequireNoIfMatch(request) || !RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
-        if (_bridge is not IExtensionHostBridge13 bridge13 || !ExtensionAbi.IsApi13Supported(bridge13.ApiVersion)) return ControllerManagementResponseBuilder.Unsupported;
+        if (_bridge is not IExtensionHostBridge13 bridge13 || !ExtensionHostApiSupport.IsApi13Supported(bridge13.ApiVersion)) return ControllerManagementResponseBuilder.Unsupported;
         var read = await bridge13.Supervisor.GetAsync(serviceId, cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
         return read.Value is { } snapshot

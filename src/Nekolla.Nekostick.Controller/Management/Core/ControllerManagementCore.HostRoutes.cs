@@ -21,7 +21,7 @@ internal sealed partial class ControllerManagementCore
         ArgumentNullException.ThrowIfNull(options);
         if (!options.EnableHostRoute) return null;
         var bridge = _bridge ?? throw new InvalidOperationException("The controller bridge is unavailable.");
-        if (!HasFullConfigurationScope(options) || !ExtensionAbi.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
+        if (!HasFullConfigurationScope(options) || !ExtensionHostApiSupport.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
 
         var path = options.HostRoutePath ?? throw new InvalidOperationException("The Host route path is unavailable.");
         var ownerRead = await bridge.ConfigurationApi.ReadAsync(cancellationToken).ConfigureAwait(false);
@@ -47,7 +47,7 @@ internal sealed partial class ControllerManagementCore
         var options = _options;
         if (!options.EnableHostRoute) return null;
         var bridge = _bridge ?? throw new InvalidOperationException("The controller bridge is unavailable.");
-        if (!ExtensionAbi.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
+        if (!ExtensionHostApiSupport.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
 
         var path = options.HostRoutePath ?? throw new InvalidOperationException("The Host route path is unavailable.");
         var read = await bridge.ConfigurationApi.ReadAsync(cancellationToken).ConfigureAwait(false);
@@ -71,7 +71,7 @@ internal sealed partial class ControllerManagementCore
     {
         ArgumentException.ThrowIfNullOrEmpty(handlerId);
         var bridge = _bridge ?? throw new InvalidOperationException("The controller bridge is unavailable.");
-        if (!HasFullConfigurationScope() || !ExtensionAbi.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
+        if (!HasFullConfigurationScope() || !ExtensionHostApiSupport.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
         var read = await bridge.ConfigurationApi.ReadAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) throw new InvalidOperationException("The controller route configuration is unavailable.");
         var staleRouteIds = snapshot.Routes
@@ -109,7 +109,7 @@ internal sealed partial class ControllerManagementCore
             throw new InvalidOperationException("The HostRoute transition identity is invalid.");
         }
         var bridge = _bridge ?? throw new InvalidOperationException("The controller bridge is unavailable.");
-        if (!HasFullConfigurationScope(options) || !ExtensionAbi.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
+        if (!HasFullConfigurationScope(options) || !ExtensionHostApiSupport.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
         var read = await bridge.ConfigurationApi.ReadAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) throw new InvalidOperationException("The controller route configuration is unavailable.");
 
@@ -182,7 +182,7 @@ internal sealed partial class ControllerManagementCore
         }
 
         var bridge = _bridge ?? throw new InvalidOperationException("The controller bridge is unavailable.");
-        if (!HasFullConfigurationScope(options) || !ExtensionAbi.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
+        if (!HasFullConfigurationScope(options) || !ExtensionHostApiSupport.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
         var read = await bridge.FullConfiguration.ReadAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) throw new InvalidOperationException("The controller route configuration is unavailable.");
 
@@ -257,7 +257,7 @@ internal sealed partial class ControllerManagementCore
         }
 
         var bridge = _bridge ?? throw new InvalidOperationException("The controller bridge is unavailable.");
-        if (!HasFullConfigurationScope() || !ExtensionAbi.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
+        if (!HasFullConfigurationScope() || !ExtensionHostApiSupport.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
         var read = await bridge.FullConfiguration.ReadAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) throw new InvalidOperationException("The controller route configuration is unavailable.");
         var candidates = snapshot.Routes.Where(route =>
@@ -287,7 +287,7 @@ internal sealed partial class ControllerManagementCore
         if (!string.Equals(handlerId, ControllerManagementApiContract.HandlerId, StringComparison.Ordinal)) throw new InvalidOperationException("The bootstrap handler identity is not fixed.");
         if (identity.RouteId == Guid.Empty || string.IsNullOrEmpty(identity.CanonicalPath) || !ControllerOptions.IsCanonicalManagementPath(identity.CanonicalPath)) throw new ArgumentException("The provisioned route identity is invalid.", nameof(identity));
         var bridge = _bridge ?? throw new InvalidOperationException("The controller bridge is unavailable.");
-        if (!HasFullConfigurationScope() || !ExtensionAbi.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
+        if (!HasFullConfigurationScope() || !ExtensionHostApiSupport.IsApi13Supported(bridge.ApiVersion)) throw new NotSupportedException("The private Host route capability is unavailable.");
         var read = await bridge.ConfigurationApi.ReadAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) throw new InvalidOperationException("The controller route configuration is unavailable.");
         var candidate = snapshot.Routes.SingleOrDefault(route => route.Id == identity.RouteId);

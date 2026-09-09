@@ -41,7 +41,7 @@ internal sealed partial class ControllerManagementCore
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
         if (_bridge is null) return ControllerManagementResponseBuilder.Unavailable;
-        if (!HasFullConfigurationScope() || !ExtensionAbi.IsApi13Supported(_bridge.ApiVersion)) return ControllerManagementResponseBuilder.Unsupported;
+        if (!HasFullConfigurationScope() || !ExtensionHostApiSupport.IsApi13Supported(_bridge.ApiVersion)) return ControllerManagementResponseBuilder.Unsupported;
 
         var method = request.Method.Trim().ToUpperInvariant();
         var path = NormalizePath(request.Path, request.Transport);

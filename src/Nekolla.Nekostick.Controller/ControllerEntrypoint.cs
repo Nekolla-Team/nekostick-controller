@@ -302,7 +302,7 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
     private static IExtensionHostBridge13 EnsureHostApiCompatibility(IExtensionStartContext context)
     {
         if (!ExtensionAbi.IsCompatible(MinimumConfigurationApiVersion, context.Host.ApiVersion) ||
-            !ExtensionAbi.IsApi13Supported(context.Host.ApiVersion) ||
+            !ExtensionHostApiSupport.IsApi13Supported(context.Host.ApiVersion) ||
             context.Host is not IExtensionHostBridge13 host13 ||
             host13.LogWriter is null)
         {
