@@ -34,6 +34,41 @@ jobs:
       - name: Run test
         run: dotnet test Nekolla.Nekostick.Controller.slnx --configuration Release --no-restore
 
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-logs
+          path: tests/**/TestResults/*.log
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.x"
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install webui dependencies
+        working-directory: webui
+        run: pnpm install --frozen-lockfile
+
+      - name: Test webui
+        working-directory: webui
+        run: pnpm test
+
+      - name: Typecheck webui
+        working-directory: webui
+        run: pnpm typecheck
+
+      - name: Build webui
+        working-directory: webui
+        run: pnpm build
+
+      - name: Build embedded webui
+        working-directory: webui
+        run: pnpm build:embedded
+
       - name: Package extension
         run: |
           set -euo pipefail
@@ -49,10 +84,52 @@ jobs:
           echo "package_path=$archive" >> "$GITHUB_OUTPUT"
         id: package
 
-      - name: Upload artifact
+      - name: Upload extension artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: nekostick-controller
           path: ${{ steps.package.outputs.package_path }}
+          archive: false
+          if-no-files-found: error
+
+      - name: Package extension with webui
+        run: |
+          set -euo pipefail
+          package_dir="artifacts/extension-webui"
+          mkdir -p "$package_dir"
+          dotnet publish src/Nekolla.Nekostick.Controller/Nekolla.Nekostick.Controller.csproj \
+            --configuration Release \
+            --no-restore \
+            --output "$package_dir" \
+            /p:IncludeWebUi=true
+          version="$(grep -oP '(?<="version": ")[^"]+' src/Nekolla.Nekostick.Controller/manifest.json)"
+          archive="artifacts/nekostick-controller-webui-${version}.zip"
+          (cd "$package_dir" && zip -qr "../nekostick-controller-webui-${version}.zip" .)
+          echo "package_path=$archive" >> "$GITHUB_OUTPUT"
+        id: package_webui
+
+      - name: Upload extension webui artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nekostick-controller-webui
+          path: ${{ steps.package_webui.outputs.package_path }}
+          archive: false
+          if-no-files-found: error
+
+      - name: Package standalone webui
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          version="$(grep -oP '(?<="version": ")[^"]+' src/Nekolla.Nekostick.Controller/manifest.json)"
+          archive="artifacts/nekostick-webui-${version}.zip"
+          (cd webui/dist && zip -qr "../../artifacts/nekostick-webui-${version}.zip" .)
+          echo "package_path=$archive" >> "$GITHUB_OUTPUT"
+        id: package_standalone
+
+      - name: Upload standalone webui artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nekostick-webui
+          path: ${{ steps.package_standalone.outputs.package_path }}
           archive: false
           if-no-files-found: error
