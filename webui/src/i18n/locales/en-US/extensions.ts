@@ -19,7 +19,7 @@ export const extensions = {
   },
   refresh: {
     button: 'Refresh directory',
-    summary: '{added} added, {updated} version-updated, {missing} missing',
+    summary: '{added} added, {updated} version-updated, {missing} missing, {skipped} skipped',
   },
   settings: {
     title: 'Extension settings',

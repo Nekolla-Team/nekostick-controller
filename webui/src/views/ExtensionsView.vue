@@ -148,7 +148,7 @@ const lifecycleMutation = useMutation({
 const refreshMutation = useMutation({
   mutationFn: refreshExtensions,
   onSuccess: async (summary) => {
-    message.success(t('extensions.refresh.summary', { added: summary.added.length, updated: summary.versionUpdated.length, missing: summary.missing.length }))
+    message.success(t('extensions.refresh.summary', { added: summary.added.length, updated: summary.versionUpdated.length, missing: summary.missing.length, skipped: summary.skipped?.length ?? 0 }))
     await queryClient.invalidateQueries({ queryKey: ['extensions'] })
   },
 })

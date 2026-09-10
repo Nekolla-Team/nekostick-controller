@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "nekolla.nekostick.controller",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "entryAssembly": "Nekolla.Nekostick.Controller.dll",
   "entryType": "Nekolla.Nekostick.Controller.ControllerEntrypoint",
   "dependencies": [],

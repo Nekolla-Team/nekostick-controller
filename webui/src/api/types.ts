@@ -351,10 +351,16 @@ export interface ExtensionRecord {
   contentHash: string | null;
 }
 
+export interface ExtensionScanSkip {
+  directoryName: string;
+  failureCode: string;
+}
+
 export interface ExtensionRefreshSummary {
   added: string[];
   versionUpdated: string[];
   missing: string[];
+  skipped: ExtensionScanSkip[] | null;
 }
 
 export interface ExtensionSettings {

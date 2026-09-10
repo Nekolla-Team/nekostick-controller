@@ -19,7 +19,7 @@ export const extensions = {
   },
   refresh: {
     button: '刷新目录',
-    summary: '新增 {added} 个，版本更新 {updated} 个，缺失 {missing} 个',
+    summary: '新增 {added} 个，版本更新 {updated} 个，缺失 {missing} 个，跳过 {skipped} 个',
   },
   settings: {
     title: '扩展设置',

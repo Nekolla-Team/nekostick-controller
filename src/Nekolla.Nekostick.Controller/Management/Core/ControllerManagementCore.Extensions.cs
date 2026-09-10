@@ -39,9 +39,11 @@ internal sealed partial class ControllerManagementCore
         if (!RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
         if (ExtensionManagement is not { } management) return ControllerManagementResponseBuilder.Unsupported;
         var read = await management.RequestRefreshAsync(cancellationToken).ConfigureAwait(false);
-        return read.IsSuccess && read.Value is { } summary
-            ? ControllerManagementResponseBuilder.SuccessUnversioned(ControllerContractMapper.ToRead(summary))
-            : ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
+        if (!read.IsSuccess || read.Value is not { } summary) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
+        var mapped = _bridge is IExtensionHostBridge13 bridge13 && ExtensionHostApiSupport.IsApi134Supported(bridge13.ApiVersion)
+            ? ControllerContractMapper.ToReadApi134(summary)
+            : ControllerContractMapper.ToRead(summary);
+        return ControllerManagementResponseBuilder.SuccessUnversioned(mapped);
     }
 
     private async ValueTask<ControllerManagementResponse> WriteExtensionLifecycleAsync(ControllerManagementRequest request, string method, string extensionId, string action, CancellationToken cancellationToken)

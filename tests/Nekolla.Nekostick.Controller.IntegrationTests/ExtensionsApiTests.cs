@@ -307,4 +307,42 @@ public sealed class ExtensionsApi133Tests(ControllerApi133Fixture fixture) : ICl
             "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             extension.GetProperty("contentHash").GetString());
     }
+
+    [Fact]
+    public async Task RefreshExtensions_OmitsSkippedBeforeApi134()
+    {
+        using var client = fixture.CreateHttpClient();
+        using var response = await client.PostAsync("/v1/extensions/refresh", content: null, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("data").GetProperty("skipped").ValueKind);
+    }
+}
+
+public sealed class ExtensionsApi134Tests(ControllerApi134Fixture fixture) : IClassFixture<ControllerApi134Fixture>
+{
+    [Fact]
+    public async Task RefreshExtensions_ExposesSkippedDirectories()
+    {
+        fixture.Host.SetRefreshSkips(
+        [
+            new ExtensionScanSkip("broken-ext", "ManifestMissing"),
+            new ExtensionScanSkip("bad-json", "JsonInvalid")
+        ]);
+
+        using var client = fixture.CreateHttpClient();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var response = await client.PostAsync("/v1/extensions/refresh", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        var skipped = document.RootElement.GetProperty("data").GetProperty("skipped");
+        Assert.Equal(JsonValueKind.Array, skipped.ValueKind);
+        var entries = skipped.EnumerateArray().ToArray();
+        Assert.Equal(2, entries.Length);
+        Assert.Equal("broken-ext", entries[0].GetProperty("directoryName").GetString());
+        Assert.Equal("ManifestMissing", entries[0].GetProperty("failureCode").GetString());
+        Assert.Equal("bad-json", entries[1].GetProperty("directoryName").GetString());
+        Assert.Equal("JsonInvalid", entries[1].GetProperty("failureCode").GetString());
+    }
 }

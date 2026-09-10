@@ -73,6 +73,20 @@ internal static class ControllerContractMapper
         Added = source.Added, VersionUpdated = source.VersionUpdated, Missing = source.Missing
     };
 
+    /// <summary>Maps a refresh summary including skipped scan directories. NoInlining: touches 1.3.4-only members.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static ControllerExtensionRefreshReadDto ToReadApi134(ExtensionRefreshSummary source) => new()
+    {
+        Added = source.Added,
+        VersionUpdated = source.VersionUpdated,
+        Missing = source.Missing,
+        Skipped = source.Skipped.Select(static skip => new ControllerExtensionScanSkipDto
+        {
+            DirectoryName = skip.DirectoryName,
+            FailureCode = skip.FailureCode
+        }).ToImmutableArray()
+    };
+
     internal static ControllerExtensionRecordReadDto ToRead(ExtensionRecordConfiguration source) => new()
     {
         ExtensionId = source.ExtensionId, Version = source.Version, LoadState = (ControllerExtensionLoadState)source.LoadState,

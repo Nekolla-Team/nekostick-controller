@@ -332,3 +332,13 @@ public sealed class ControllerApi133Fixture : ControllerApiFixture
     {
     }
 }
+
+/// <summary>Integration fixture that negotiates host API 1.3.4 with the fake bridge.</summary>
+public sealed class ControllerApi134Fixture : ControllerApiFixture
+{
+    /// <summary>Creates the API 1.3.4 integration fixture.</summary>
+    public ControllerApi134Fixture()
+        : base(new HostApiVersion(1, 3, 4))
+    {
+    }
+}

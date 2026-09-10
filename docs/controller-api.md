@@ -26,6 +26,7 @@
 | `GET` | `/v1/extensions` | 列出 extension records |
 | `GET` | `/v1/extensions/{id}` | 读取 extension record |
 | `GET`, `PUT`, `DELETE` | `/v1/extensions/{id}/settings` | 读取、替换或删除 extension settings |
+| `POST` | `/v1/extensions/refresh` | 重新扫描扩展目录并返回摘要（含 `skipped`，Host API >=1.3.4） |
 
 route/service `{id}` 是 GUID；extension `{id}` 是不含 `/` 的非空字符串。已识别资源上的其他 method 返回 `405 method_not_allowed`，未知路径返回 `404 not_found`。
 
@@ -404,6 +405,21 @@ extension record 是只读信息：
 
 `loadState` 是 `Discovered`、`Loaded`、`Stopped`、`Failed` 或 `Unloading`。
 `contentHash` 是最近一次 Host 扫描记录的扩展目录 SHA-256 摘要；尚未记录或 Host API 低于 `1.3.3` 时为 `null`。
+
+`POST /v1/extensions/refresh` 要求 Host 重新扫描扩展目录，请求 body 必须为空，成功响应是无版本 envelope（不带 ETag）：
+
+```json
+{
+  "added": [],
+  "versionUpdated": [],
+  "missing": [],
+  "skipped": [
+    { "directoryName": "broken-ext", "failureCode": "ManifestMissing" }
+  ]
+}
+```
+
+`skipped` 逐项报告本次扫描中被跳过的目录：`directoryName` 是目录叶子名（不含完整路径），`failureCode` 是稳定的失败类别名（如 `ManifestMissing`、`JsonInvalid`）。Host API 低于 `1.3.4` 时 `skipped` 为 `null`；更早版本（低于 `1.3.1`）不提供该端点，返回 `501 unsupported`。
 
 extension settings 是扩展自己的 opaque JSON。GET 返回：
 

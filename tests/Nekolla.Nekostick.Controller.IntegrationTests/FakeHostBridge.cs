@@ -17,6 +17,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
     private HostConfigurationSnapshot _snapshot;
     private ImmutableArray<ExtensionServiceRuntimeSnapshot> _supervisorSnapshots = ImmutableArray<ExtensionServiceRuntimeSnapshot>.Empty;
     private ExtensionHostInfoSnapshot _hostInfo = ExtensionHostInfoSnapshot.Unavailable;
+    private ImmutableArray<ExtensionScanSkip> _refreshSkips = ImmutableArray<ExtensionScanSkip>.Empty;
     private ConfigurationError? _nextReplaceFailure;
     private ConfigurationError? _nextApplyFailure;
     private ConfigurationError? _nextManagementFailure;
@@ -80,6 +81,24 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
         lock (_sync)
         {
             _hostInfo = snapshot;
+        }
+    }
+
+    /// <summary>Sets the scan skips reported by the next refresh.</summary>
+    /// <param name="skips">The skipped directories with their failure categories.</param>
+    public void SetRefreshSkips(ImmutableArray<ExtensionScanSkip> skips)
+    {
+        lock (_sync)
+        {
+            _refreshSkips = skips.IsDefault ? ImmutableArray<ExtensionScanSkip>.Empty : skips;
+        }
+    }
+
+    private ImmutableArray<ExtensionScanSkip> ReadRefreshSkips()
+    {
+        lock (_sync)
+        {
+            return _refreshSkips;
         }
     }
     public IExtensionManagementApi Management { get; }
@@ -607,7 +626,11 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
             if (owner.ConsumeManagementFailure() is { } failure)
                 return ValueTask.FromResult(ConfigurationReadResult<ExtensionRefreshSummary>.Failure(failure));
             return ValueTask.FromResult(ConfigurationReadResult<ExtensionRefreshSummary>.Success(
-                new ExtensionRefreshSummary(ImmutableArray<string>.Empty, ImmutableArray<string>.Empty, ImmutableArray<string>.Empty)));
+                new ExtensionRefreshSummary(
+                    ImmutableArray<string>.Empty,
+                    ImmutableArray<string>.Empty,
+                    ImmutableArray<string>.Empty,
+                    owner.ReadRefreshSkips())));
         }
 
         private ValueTask<ConfigurationWriteResult> Write(string extensionId, ExtensionLoadState loadState, bool running, CancellationToken cancellationToken)
