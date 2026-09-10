@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using Nekolla.Nekostick.Contracts;
 
 namespace Nekolla.Nekostick.Controller.Management;
@@ -119,4 +120,12 @@ public sealed class ControllerManagementHandlerFactory : IControllerManagementHa
     /// <param name="options">Controller options used by the handler.</param>
     /// <returns>A configured management handler.</returns>
     public IExtensionHandler Create(IControllerManagementDispatcher dispatcher, ControllerOptions options) => new ControllerManagementHandler(dispatcher, options);
+    /// <summary>Creates the streaming management handler after the runtime host-version gate.</summary>
+    /// <param name="dispatcher">Dispatcher that processes management requests.</param>
+    /// <param name="options">Controller options used by the handler.</param>
+    /// <returns>The streaming management handler.</returns>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public IExtensionStreamingHandler? CreateStreaming(
+        IControllerManagementDispatcher dispatcher,
+        ControllerOptions options) => new ControllerStreamingManagementHandler(dispatcher, options);
 }

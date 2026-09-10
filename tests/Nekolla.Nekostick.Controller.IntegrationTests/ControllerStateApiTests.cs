@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using Nekolla.Nekostick.Contracts;
 using Nekolla.Nekostick.Controller.Management;
 using Xunit;
 
@@ -27,6 +28,7 @@ public sealed class ControllerStateApiTests(ControllerApiFixture fixture) : ICla
         AssertListener(listeners.GetProperty("httpJson"), enabled: true, running: true);
         AssertListener(listeners.GetProperty("grpc"), enabled: true, running: true);
         AssertListener(listeners.GetProperty("unixSocket"), enabled: true, running: true);
+        Assert.Equal(JsonValueKind.Null, data.GetProperty("host").ValueKind);
     }
 
     [Fact]
@@ -54,5 +56,58 @@ public sealed class ControllerStateApiTests(ControllerApiFixture fixture) : ICla
         Assert.Equal(ControllerManagementApiContract.Version, envelope.GetProperty("apiVersion").GetInt32());
         Assert.True(envelope.GetProperty("ok").GetBoolean());
         Assert.Equal("ok", envelope.GetProperty("code").GetString());
+    }
+}
+
+public sealed class ControllerStateApi133Tests(ControllerApi133Fixture fixture) : IClassFixture<ControllerApi133Fixture>
+{
+    [Fact]
+    public async Task GetControllerState_WhenHostInfoUnavailable_ReturnsNullHost()
+    {
+        fixture.Host.SetHostInfo(ExtensionHostInfoSnapshot.Unavailable);
+
+        using var client = fixture.CreateHttpClient();
+        using var response = await client.GetAsync("/v1/controller/state", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        var host = document.RootElement.GetProperty("data").GetProperty("host");
+        Assert.Equal(JsonValueKind.Null, host.ValueKind);
+    }
+
+    [Fact]
+    public async Task GetControllerState_ReportsHostInfoForApi133()
+    {
+        var snapshotAt = DateTimeOffset.UtcNow;
+        fixture.Host.SetHostInfo(new ExtensionHostInfoSnapshot(
+            "node-a",
+            readOnly: true,
+            extensionsSkipped: false,
+            supervisorDisabled: true,
+            databaseAvailable: true,
+            snapshotAvailable: true,
+            configurationValid: true,
+            publishedConfigurationVersion: 42,
+            lastSnapshotState: ExtensionHostSnapshotState.Accepted,
+            lastSnapshotStateAt: snapshotAt,
+            readiness: ExtensionHostReadinessState.Ready));
+
+        using var client = fixture.CreateHttpClient();
+        using var response = await client.GetAsync("/v1/controller/state", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        var host = document.RootElement.GetProperty("data").GetProperty("host");
+        Assert.Equal("node-a", host.GetProperty("nodeId").GetString());
+        Assert.True(host.GetProperty("readOnly").GetBoolean());
+        Assert.False(host.GetProperty("extensionsSkipped").GetBoolean());
+        Assert.True(host.GetProperty("supervisorDisabled").GetBoolean());
+        Assert.True(host.GetProperty("databaseAvailable").GetBoolean());
+        Assert.True(host.GetProperty("snapshotAvailable").GetBoolean());
+        Assert.True(host.GetProperty("configurationValid").GetBoolean());
+        Assert.Equal(42, host.GetProperty("publishedConfigurationVersion").GetInt64());
+        Assert.Equal("accepted", host.GetProperty("lastSnapshotState").GetString());
+        Assert.Equal(snapshotAt.ToUniversalTime(), host.GetProperty("lastSnapshotStateAt").GetDateTimeOffset());
+        Assert.Equal("ready", host.GetProperty("readiness").GetString());
     }
 }

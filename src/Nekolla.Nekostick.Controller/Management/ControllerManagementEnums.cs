@@ -141,7 +141,10 @@ public enum ControllerServiceLifecycleState
     /// <summary>The service is stopping.</summary>
     Stopping,
     /// <summary>The service failed to start or remain healthy.</summary>
-    Failed
+    Failed,
+    /// <summary>The service is waiting for a local startup prerequisite.</summary>
+    [JsonStringEnumMemberName("waiting")]
+    Waiting
 }
 
 /// <summary>Identifies the safe health state of a supervised service runtime.</summary>

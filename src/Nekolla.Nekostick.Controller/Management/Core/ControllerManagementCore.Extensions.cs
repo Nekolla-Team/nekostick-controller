@@ -14,7 +14,10 @@ internal sealed partial class ControllerManagementCore
         if (ExtensionManagement is not { } management) return ControllerManagementResponseBuilder.Unsupported;
         var read = await management.ListAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
-        return ControllerManagementResponseBuilder.SuccessUnversioned(read.Value.Select(ControllerContractMapper.ToRead).ToImmutableArray());
+        var records = _bridge is IExtensionHostBridge13 bridge13 && ExtensionHostApiSupport.IsApi133Supported(bridge13.ApiVersion)
+            ? read.Value.Select(ControllerContractMapper.ToReadApi133).ToImmutableArray()
+            : read.Value.Select(ControllerContractMapper.ToRead).ToImmutableArray();
+        return ControllerManagementResponseBuilder.SuccessUnversioned(records);
     }
 
     private async ValueTask<ControllerManagementResponse> ReadExtensionAsync(ControllerManagementRequest request, string extensionId, CancellationToken cancellationToken)
@@ -24,7 +27,11 @@ internal sealed partial class ControllerManagementCore
         var read = await management.ListAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
         var extension = read.Value.FirstOrDefault(entry => string.Equals(entry.ExtensionId, extensionId, StringComparison.Ordinal));
-        return extension is null ? ControllerManagementResponseBuilder.NotFound : ControllerManagementResponseBuilder.SuccessUnversioned(ControllerContractMapper.ToRead(extension));
+        if (extension is null) return ControllerManagementResponseBuilder.NotFound;
+        var mapped = _bridge is IExtensionHostBridge13 bridge13 && ExtensionHostApiSupport.IsApi133Supported(bridge13.ApiVersion)
+            ? ControllerContractMapper.ToReadApi133(extension)
+            : ControllerContractMapper.ToRead(extension);
+        return ControllerManagementResponseBuilder.SuccessUnversioned(mapped);
     }
 
     private async ValueTask<ControllerManagementResponse> RefreshExtensionsAsync(ControllerManagementRequest request, CancellationToken cancellationToken)

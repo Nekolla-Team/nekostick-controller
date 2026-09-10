@@ -57,6 +57,13 @@ public sealed class ControllerServiceRuntimeReadDto
     [JsonPropertyName("ownerExtensionId")] public string? OwnerExtensionId { get; init; }
 }
 
+/// <summary>Read representation of a node-local service runtime action outcome.</summary>
+public sealed class ControllerServiceRuntimeActionReadDto
+{
+    /// <summary>Outcome of the requested action.</summary>
+    [JsonPropertyName("outcome")] public string Outcome { get; init; } = string.Empty;
+}
+
 /// <summary>Write representation for service create/patch. Environment is write-only on create.</summary>
 public sealed class ControllerServiceWriteDto
 {

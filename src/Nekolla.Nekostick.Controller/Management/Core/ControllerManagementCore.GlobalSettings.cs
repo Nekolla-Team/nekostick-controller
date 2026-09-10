@@ -11,7 +11,20 @@ internal sealed partial class ControllerManagementCore
         if (!RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
         var read = await ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
-        var data = new ControllerApiRootDto { Version = snapshot.Version, GlobalSettings = ControllerContractMapper.ToRead(snapshot.GlobalSettings), Routes = snapshot.Routes.Where(route => !IsReservedRoute(route)).Select(ControllerContractMapper.ToRead).ToImmutableArray(), Services = snapshot.Services.Select(ControllerContractMapper.ToRead).ToImmutableArray(), Extensions = snapshot.ExtensionRecords.Select(ControllerContractMapper.ToRead).ToImmutableArray() };
+        var useApi133Mapper = _bridge is IExtensionHostBridge13 bridge13 && ExtensionHostApiSupport.IsApi133Supported(bridge13.ApiVersion);
+        Func<ExtensionRecordConfiguration, ControllerExtensionRecordReadDto> mapExtension = useApi133Mapper
+            ? ControllerContractMapper.ToReadApi133
+            : ControllerContractMapper.ToRead;
+        var extensions = snapshot.ExtensionRecords.Select(mapExtension).ToImmutableArray();
+
+        var data = new ControllerApiRootDto
+        {
+            Version = snapshot.Version,
+            GlobalSettings = ControllerContractMapper.ToRead(snapshot.GlobalSettings),
+            Routes = snapshot.Routes.Where(route => !IsReservedRoute(route)).Select(ControllerContractMapper.ToRead).ToImmutableArray(),
+            Services = snapshot.Services.Select(ControllerContractMapper.ToRead).ToImmutableArray(),
+            Extensions = extensions
+        };
         return ControllerManagementResponseBuilder.Success(data, snapshot.Version);
     }
 

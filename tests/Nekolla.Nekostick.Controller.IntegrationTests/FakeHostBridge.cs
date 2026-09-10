@@ -13,16 +13,19 @@ namespace Nekolla.Nekostick.Controller.IntegrationTests;
 public sealed class FakeHostBridge : IExtensionHostBridge13
 {
     private readonly object _sync = new();
+    private readonly HostApiVersion _apiVersion;
     private HostConfigurationSnapshot _snapshot;
     private ImmutableArray<ExtensionServiceRuntimeSnapshot> _supervisorSnapshots = ImmutableArray<ExtensionServiceRuntimeSnapshot>.Empty;
+    private ExtensionHostInfoSnapshot _hostInfo = ExtensionHostInfoSnapshot.Unavailable;
     private ConfigurationError? _nextReplaceFailure;
     private ConfigurationError? _nextApplyFailure;
     private ConfigurationError? _nextManagementFailure;
     private readonly HashSet<string> _runningExtensions = new(StringComparer.Ordinal);
 
-    public FakeHostBridge(HostConfigurationSnapshot initialSnapshot)
+    public FakeHostBridge(HostConfigurationSnapshot initialSnapshot, HostApiVersion? apiVersion = null)
     {
         _snapshot = initialSnapshot;
+        _apiVersion = apiVersion ?? new HostApiVersion(1, 3, 1);
         FullConfiguration = new FakeFullConfigurationApi(this);
         Status = new FakeStatusSink();
         Logger = new FakeLogger();
@@ -40,8 +43,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
         RouteEvents = new FakeRouteEvents();
         Management = new FakeManagementApi(this);
     }
-
-    public HostApiVersion ApiVersion { get; } = new(1, 3, 1);
+    public HostApiVersion ApiVersion => _apiVersion;
     public IExtensionSettingsReader Configuration { get; }
     public IExtensionConfigurationApi ConfigurationApi { get; }
     public IExtensionFullConfigurationApi FullConfiguration { get; }
@@ -57,6 +59,29 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
     public IExtensionSupervisorApi Supervisor { get; }
     public IExtensionRouteEvents RouteEvents { get; }
     public IExtensionLogWriter LogWriter { get; }
+
+    /// <summary>Gets the latest host information snapshot returned by the 1.3.3 bridge.</summary>
+    public ExtensionHostInfoSnapshot HostInfo
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _hostInfo;
+            }
+        }
+    }
+ 
+    /// <summary>Sets the host information snapshot returned by the fake bridge.</summary>
+    /// <param name="snapshot">The safe host information snapshot to return.</param>
+    public void SetHostInfo(ExtensionHostInfoSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        lock (_sync)
+        {
+            _hostInfo = snapshot;
+        }
+    }
     public IExtensionManagementApi Management { get; }
 
     public ConcurrentQueue<ExtensionStatus> ReportedStatuses => ((FakeStatusSink)Status).Statuses;
@@ -162,7 +187,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
         {
             return _snapshot.ExtensionRecords.Select(record => new ExtensionManagementEntry(
                 record.ExtensionId, record.Version, record.LoadState, record.CreatedAt, record.UpdatedAt,
-                record.RecordVersion, _runningExtensions.Contains(record.ExtensionId), record.Version)).ToImmutableArray();
+                record.RecordVersion, _runningExtensions.Contains(record.ExtensionId), record.Version, record.ContentHash)).ToImmutableArray();
         }
     }
 
@@ -171,7 +196,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
         lock (_sync)
         {
             var record = _snapshot.ExtensionRecords.First(candidate => string.Equals(candidate.ExtensionId, extensionId, StringComparison.Ordinal));
-            var updated = new ExtensionRecordConfiguration(record.ExtensionId, record.Version, loadState, record.CreatedAt, DateTimeOffset.UtcNow, record.RecordVersion + 1);
+            var updated = new ExtensionRecordConfiguration(record.ExtensionId, record.Version, loadState, record.CreatedAt, DateTimeOffset.UtcNow, record.RecordVersion + 1, record.ContentHash);
             _snapshot = new HostConfigurationSnapshot(_snapshot.Version + 1, _snapshot.GlobalSettings, _snapshot.Routes, _snapshot.Services,
                 _snapshot.ExtensionRecords.Replace(record, updated), _snapshot.ExtensionSettings);
             if (running) _runningExtensions.Add(extensionId);
@@ -198,6 +223,33 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
         lock (_sync)
         {
             return _supervisorSnapshots;
+        }
+    }
+
+    private void SetSupervisorLifecycle(Guid serviceId, ExtensionServiceLifecycleState lifecycleState)
+    {
+        lock (_sync)
+        {
+            var snapshots = _supervisorSnapshots.ToBuilder();
+            for (var index = 0; index < snapshots.Count; index++)
+            {
+                var current = snapshots[index];
+                if (current.ServiceId != serviceId) continue;
+                snapshots[index] = new ExtensionServiceRuntimeSnapshot(
+                    current.ServiceId,
+                    current.ProcessId,
+                    current.StartedAt,
+                    current.Uptime,
+                    lifecycleState,
+                    current.HealthState,
+                    current.ForwardedRequestCount,
+                    current.ActiveForwardedRequestCount,
+                    current.LastUpdatedAt,
+                    current.LastHealthAt,
+                    current.OwnerExtensionId);
+                _supervisorSnapshots = snapshots.ToImmutable();
+                return;
+            }
         }
     }
 
@@ -596,7 +648,34 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
                 .FirstOrDefault();
             return ValueTask.FromResult(ConfigurationReadResult<ExtensionServiceRuntimeSnapshot?>.Success(snapshot));
         }
+        public ValueTask<ConfigurationWriteResult> ResumeAsync(Guid serviceId, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!owner.ReadSnapshot().Services.Any(service => service.Id == serviceId))
+            {
+                return ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.NotFound)));
+            }
+
+            var snapshot = owner.ReadSupervisorSnapshots().FirstOrDefault(value => value.ServiceId == serviceId);
+            if (snapshot is { LifecycleState: ExtensionServiceLifecycleState.Waiting })
+            {
+                owner.SetSupervisorLifecycle(serviceId, ExtensionServiceLifecycleState.Running);
+                return ValueTask.FromResult(ConfigurationWriteResult.Success());
+            }
+
+            return ValueTask.FromResult(ConfigurationWriteResult.NoOp());
+        }
+
+        public ValueTask<ConfigurationWriteResult> RestartAsync(Guid serviceId, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return owner.ReadSnapshot().Services.Any(service => service.Id == serviceId)
+                ? ValueTask.FromResult(ConfigurationWriteResult.Success())
+                : ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.NotFound)));
+        }
+
     }
+
 
     private sealed class FakeSettingsReader(FakeHostBridge owner) : IExtensionSettingsReader
     {
@@ -714,10 +793,11 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
     }
 }
 
-/// <summary>Captures the registered management handler so tests can drive the HostRoute transport in-process.</summary>
+/// <summary>Captures buffered and streaming management handlers for in-process HostRoute tests.</summary>
 public sealed class FakeExtensionRegistration : IExtensionRegistration
 {
     public IExtensionHandler? Handler { get; private set; }
+    public IExtensionStreamingHandler? StreamingHandler { get; private set; }
 
     public bool TryRegisterHandler(IExtensionHandler handler)
     {
@@ -725,17 +805,29 @@ public sealed class FakeExtensionRegistration : IExtensionRegistration
         return true;
     }
 
+    public bool TryRegisterStreamingHandler(IExtensionStreamingHandler handler)
+    {
+        StreamingHandler = handler;
+        return true;
+    }
+
     public bool TryRegisterFallback(IExtensionFallback fallback) => false;
 
     public bool TryUnregisterHandler(string handlerId)
     {
-        if (Handler is null || !string.Equals(Handler.HandlerId, handlerId, StringComparison.Ordinal))
+        if (Handler is not null && string.Equals(Handler.HandlerId, handlerId, StringComparison.Ordinal))
         {
-            return false;
+            Handler = null;
+            return true;
         }
 
-        Handler = null;
-        return true;
+        if (StreamingHandler is not null && string.Equals(StreamingHandler.HandlerId, handlerId, StringComparison.Ordinal))
+        {
+            StreamingHandler = null;
+            return true;
+        }
+
+        return false;
     }
 
     public bool TryUnregisterFallback() => false;

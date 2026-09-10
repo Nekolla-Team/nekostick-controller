@@ -24,6 +24,7 @@ public sealed class ExtensionsApiTests(ControllerApiFixture fixture) : IClassFix
         Assert.Equal(JsonValueKind.Array, extensions.ValueKind);
         var extension = extensions.EnumerateArray().Single(item => item.GetProperty("extensionId").GetString() == ControllerApiFixture.TestExtensionId);
         Assert.Equal("Loaded", extension.GetProperty("loadState").GetString());
+        Assert.Equal(JsonValueKind.Null, extension.GetProperty("contentHash").ValueKind);
     }
 
     [Fact]
@@ -41,6 +42,7 @@ public sealed class ExtensionsApiTests(ControllerApiFixture fixture) : IClassFix
         var extension = envelope.GetProperty("data");
         Assert.Equal(ControllerApiFixture.TestExtensionId, extension.GetProperty("extensionId").GetString());
         Assert.Equal("Loaded", extension.GetProperty("loadState").GetString());
+        Assert.Equal(JsonValueKind.Null, extension.GetProperty("contentHash").ValueKind);
     }
 
     [Fact]
@@ -278,5 +280,31 @@ public sealed class ExtensionsApiTests(ControllerApiFixture fixture) : IClassFix
         Assert.Equal(1, envelope.GetProperty("apiVersion").GetInt32());
         Assert.False(envelope.GetProperty("ok").GetBoolean());
         Assert.Equal(code, envelope.GetProperty("code").GetString());
+    }
+}
+
+public sealed class ExtensionsApi133Tests(ControllerApi133Fixture fixture) : IClassFixture<ControllerApi133Fixture>
+{
+    [Fact]
+    public async Task ExtensionRecords_ExposeContentHashOnApi133Host()
+    {
+        using var client = fixture.CreateHttpClient();
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        using var member = await client.GetAsync($"/v1/extensions/{ControllerApiFixture.TestExtensionId}", cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, member.StatusCode);
+        using var memberDocument = JsonDocument.Parse(await member.Content.ReadAsStringAsync(cancellationToken));
+        Assert.Equal(
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            memberDocument.RootElement.GetProperty("data").GetProperty("contentHash").GetString());
+
+        using var root = await client.GetAsync("/v1", cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, root.StatusCode);
+        using var rootDocument = JsonDocument.Parse(await root.Content.ReadAsStringAsync(cancellationToken));
+        var extension = rootDocument.RootElement.GetProperty("data").GetProperty("extensions").EnumerateArray()
+            .Single(item => item.GetProperty("extensionId").GetString() == ControllerApiFixture.TestExtensionId);
+        Assert.Equal(
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            extension.GetProperty("contentHash").GetString());
     }
 }

@@ -19,7 +19,7 @@ namespace Nekolla.Nekostick.Controller.IntegrationTests;
 /// Boots the real <see cref="ControllerEntrypoint"/> against an in-memory fake Host bridge with
 /// all four management transports listening on isolated loopback endpoints.
 /// </summary>
-public sealed class ControllerApiFixture : IAsyncLifetime
+public class ControllerApiFixture : IAsyncLifetime
 {
     public const string ApiKey = "integration-test-key-0123456789abcdef";
     public const string HostRoutePrefix = "/it-controller";
@@ -28,6 +28,21 @@ public sealed class ControllerApiFixture : IAsyncLifetime
     public const string SpareExtensionId = "nekolla.nekostick.spare-extension";
 
     private readonly ConcurrentBag<GrpcChannel> _grpcChannels = new();
+
+    private readonly HostApiVersion _hostApiVersion;
+
+    /// <summary>Creates the default integration fixture against a host API 1.3.1 bridge.</summary>
+    public ControllerApiFixture()
+        : this(new HostApiVersion(1, 3, 1))
+    {
+    }
+
+    /// <summary>Creates an integration fixture for the supplied host API version.</summary>
+    /// <param name="hostApiVersion">The negotiated host API version exposed by the fake bridge.</param>
+    protected ControllerApiFixture(HostApiVersion hostApiVersion)
+    {
+        _hostApiVersion = hostApiVersion;
+    }
     private ControllerEntrypoint? _entrypoint;
     private FakeHostBridge? _host;
     private string _socketDirectory = string.Empty;
@@ -108,7 +123,8 @@ public sealed class ControllerApiFixture : IAsyncLifetime
                     ExtensionLoadState.Loaded,
                     now,
                     now,
-                    recordVersion: 1),
+                    recordVersion: 1,
+                    contentHash: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
                 new ExtensionRecordConfiguration(
                     SpareExtensionId,
                     "1.2.0",
@@ -116,7 +132,7 @@ public sealed class ControllerApiFixture : IAsyncLifetime
                     now,
                     now,
                     recordVersion: 1)),
-            extensionSettings: ImmutableArray.Create(settings)));
+            extensionSettings: ImmutableArray.Create(settings)), _hostApiVersion);
 
         var options = new ControllerOptions
         {
@@ -304,5 +320,15 @@ public sealed class ControllerApiFixture : IAsyncLifetime
         }
 
         return directory?.FullName ?? throw new InvalidOperationException("The repository root could not be located.");
+    }
+}
+
+/// <summary>Integration fixture that negotiates host API 1.3.3 with the fake bridge.</summary>
+public sealed class ControllerApi133Fixture : ControllerApiFixture
+{
+    /// <summary>Creates the API 1.3.3 integration fixture.</summary>
+    public ControllerApi133Fixture()
+        : base(new HostApiVersion(1, 3, 3))
+    {
     }
 }

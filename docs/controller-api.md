@@ -1,18 +1,18 @@
 # Nekostick Controller 管理 API 参考
 
-`nekolla.nekostick.controller` 通过本地传输提供同机管理 API。当前公共协议是 `apiVersion: 1`，需要 Host API `>=1.3.0 <2.0.0`。
+`nekolla.nekostick.controller` 通过本地传输提供同机管理 API。当前公共协议是 `apiVersion: 1`，需要 Host API `>=1.3.1 <2.0.0`。
 
 所有启用的传输共享同一套资源、认证、JSON、并发和错误语义。控制器不绑定远程 TCP 地址。
 
 ## 1. 资源一览
 
-路径以规范形式书写，不带末尾 `/`：
+路径以规范形式书写；root 路径的可选末尾 `/` 会在对应传输规则中说明：
 
 | Method | Path | 用途 |
 | --- | --- | --- |
 | `GET` | `/v1` | 读取 API 根信息和配置概览 |
-| `GET` | `/v1/controller/state` | 读取 bootstrap 模式和 listener 运行状态 |
-| `POST` | `/v1/controller/reload-settings` | 重新读取并热应用 controller extension settings |
+| `GET` | `/v1/controller/state` | 读取 bootstrap 模式、listener 运行状态和 Web UI 状态 |
+| `GET` | `/`（HTTP/JSON、Unix socket）；`hostRoutePath`、`hostRoutePath/`（HostRoute） | 读取内嵌的单文件 SPA 外壳（无需 API key） |
 | `GET`, `PATCH` | `/v1/global-settings` | 读取或更新全局设置 |
 | `GET`, `POST` | `/v1/routes` | 列出或创建 route |
 | `GET`, `PATCH`, `DELETE` | `/v1/routes/{id}` | 读取、更新或删除 route |
@@ -20,6 +20,8 @@
 | `GET`, `PATCH`, `DELETE` | `/v1/services/{id}` | 读取、更新或删除 service |
 | `GET` | `/v1/services/runtime` | 读取所有服务的 runtime telemetry |
 | `GET` | `/v1/services/{id}/runtime` | 读取单个服务的 runtime telemetry |
+| `POST` | `/v1/services/{id}/runtime/resume` | 在本节点恢复处于 waiting 的 service（Host API >=1.3.3） |
+| `POST` | `/v1/services/{id}/runtime/restart` | 在本节点严格重启 service（Host API >=1.3.3） |
 | `GET`, `PUT`, `DELETE` | `/v1/services/{id}/environment` | 读取、替换或清空 service environment |
 | `GET` | `/v1/extensions` | 列出 extension records |
 | `GET` | `/v1/extensions/{id}` | 读取 extension record |
@@ -80,6 +82,26 @@ Unix socket 承载 HTTP/1.1，仅在非 Windows 平台可用。客户端连接�
 
 启动时最终 socket path 必须不存在；已有文件、目录、symlink 或 reparse point 不会被覆盖。父目录必须是安全的真实目录，group/other 不可写，也不能经过 `/tmp` 或 `/private/tmp`。socket 文件模式固定并验证为 `0600`。停止时只有在所有权和安全性仍可证明时才删除 socket。
 
+### 2.5 Web UI
+
+Web UI 在各传输的 controller root 提供内嵌的单文件 SPA 外壳：
+
+- HTTP/JSON 和 Unix socket：仅精确的 `GET /` 提供页面；这是 listener 的根路径。
+- HostRoute：`GET <hostRoutePath>` 或 `GET <hostRoutePath>/` 提供页面；仅 Host API `>=1.3.2` 且成功注册 streaming handler 时启用。`<hostRoutePath>/v1/...` 等更深路径仍然进入管理 API。
+- gRPC 不提供 Web UI 页面。
+
+页面响应的 `Content-Type` 为 `text/html`，不需要 `x-nekostick-controller-key`。仅接受 `GET`；其他 method 会继续进入普通管理 API admission。页面路径不添加 CORS response headers。
+
+Web UI 由 controller extension settings 中的 `enableWebUi` 控制，默认值为 `false`：
+
+```json
+{
+  "enableWebUi": false
+}
+```
+
+只有设置启用且程序集包含 `webui/dist-embedded/index.html` 时才会提供页面；禁用、资源不存在或不满足 HostRoute streaming 条件时，request 会继续现有管线并返回普通的 `404`/认证响应。Host API `<1.3.2` 的 buffered HostRoute 不提供页面，root 请求保持普通 `404` 语义。
+
 ## 3. 认证与请求边界
 
 所有启用传输都使用同一个 API key：
@@ -139,14 +161,14 @@ key 必须恰好出现一次，长度 `32..4096`，不能包含空白。HTTP、U
 | `ok` | 是否成功 |
 | `code` | 稳定机器码，客户端应按它分支 |
 | `message` | 固定人类可读文本，不适合程序化分支 |
-| `version` | 需要聚合版本的成功响应（包括 reload-settings）的 Host 聚合版本；state 和 runtime telemetry 固定为 `null` |
+| `version` | 需要聚合版本的成功响应（包括 reload-settings）的 Host 聚合版本；state、runtime telemetry 和 runtime action 固定为 `null` |
 
-持久化配置和 `reload-settings` 成功响应带强 ETag，例如 `ETag: "42"`；state 和 runtime telemetry 成功响应不带 ETag。
+持久化配置和 `reload-settings` 成功响应带强 ETag，例如 `ETag: "42"`；state、runtime telemetry 和 runtime action 成功响应不带 ETag。
 
 ### 状态码
 
 | Status | envelope `code` | 含义 |
-| 200 | `ok` | GET、PATCH、PUT、runtime GET、state GET 或 settings reload 成功 |
+| 200 | `ok` | GET、PATCH、PUT、runtime GET、runtime action POST、state GET 或 settings reload 成功 |
 | 201 | `ok` | POST 创建成功；带 `Location` |
 | 204 | 无 body | DELETE 成功；响应 header 带新 ETag |
 | 400 | `invalid_request` | JSON、header、body、ID、path 或资源语义无效 |
@@ -349,7 +371,7 @@ DELETE 清空 environment。environment value 可能包含 secret，应按敏感
 | `processId` | 已知时为本机 process ID，否则 `null` |
 | `startedAt` | 当前进程代次的 UTC 启动时间，未知为 `null` |
 | `uptimeMs` | 当前进程代次的运行毫秒数，未知为 `null` |
-| `lifecycleState` | `Unknown`、`Disabled`、`Starting`、`Running`、`Stopping`、`Failed` |
+| `lifecycleState` | `Unknown`、`Disabled`、`Starting`、`Running`、`Stopping`、`Failed`、`waiting` |
 | `healthState` | `Unknown`、`Healthy`、`Unhealthy` |
 | `forwardedRequestCount` | 累计转发请求数 |
 | `activeForwardedRequestCount` | 当前转发中的请求数 |
@@ -357,6 +379,12 @@ DELETE 清空 environment。environment value 可能包含 secret，应按敏感
 | `lastHealthAt` | 最近健康检查时间，未知为 `null` |
 
 控制器不会伪造 Host 没有的 telemetry。member 不存在时返回 `404 not_found`；能力不支持返回 `501 unsupported`；存储或 runtime 数据不可用返回 `503 storage_unavailable`。
+
+#### 6.5.1 Service runtime actions
+
+`POST /v1/services/{id}/runtime/resume` 用于在本节点主动恢复处于 `waiting` 的 service；`POST /v1/services/{id}/runtime/restart` 用于在本节点执行严格的停后启动。两者都要求请求 body 为空，不接受 `If-Match`，成功 envelope 的 `version` 固定为 `null`，响应不带 ETag。它们不会写入或同步全局配置。
+
+resume 成功时 `data.outcome` 为 `resumed`；service 已经不在 waiting 状态而请求被忽略时为 `ignored`。restart 成功时始终为 `restarted`，不会返回 `ignored`。Host API 低于 `1.3.3` 时返回 `501 unsupported`；未知 service 返回 `404 not_found`；service 状态验证失败返回 `400 invalid_request`；其他 Host 错误按统一错误映射返回。
 
 ### 6.6 Extensions
 
@@ -369,11 +397,13 @@ extension record 是只读信息：
   "loadState": "Loaded",
   "createdAt": "2026-08-24T00:00:00.0000000+00:00",
   "updatedAt": "2026-08-24T00:10:00.0000000+00:00",
-  "recordVersion": 3
+  "recordVersion": 3,
+  "contentHash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 }
 ```
 
 `loadState` 是 `Discovered`、`Loaded`、`Stopped`、`Failed` 或 `Unloading`。
+`contentHash` 是最近一次 Host 扫描记录的扩展目录 SHA-256 摘要；尚未记录或 Host API 低于 `1.3.3` 时为 `null`。
 
 extension settings 是扩展自己的 opaque JSON。GET 返回：
 
@@ -445,7 +475,8 @@ curl --fail-with-body \
 
 ### 控制器状态与设置热重载
 
-`GET /v1/controller/state` 返回当前 controller runtime state。它是只读、未版本化的状态读取：请求 body 必须为空，不接受 `If-Match`，成功响应不带 ETag 且 envelope `version` 固定为 `null`。响应只包含 bootstrap 模式和 listener 的 enablement/running 状态，不包含设置值、端口、路径、API key 或其他 secret。每次读取都会对照 Host 配置核实 HostRoute listener 状态；Host 配置暂时不可读时返回 `503 unavailable`。
+`GET /v1/controller/state` 返回当前 controller runtime state。它是只读、未版本化的状态读取：请求 body 必须为空，不接受 `If-Match`，成功响应不带 ETag 且 envelope `version` 固定为 `null`。响应包含 bootstrap 模式、listener 的 enablement/running 状态、始终存在的 `webUi` 对象，以及 Host API `>=1.3.3` 时可用的非敏感 `host` 快照；不包含设置值、端口、路径、API key 或其他 secret。`webUi.embedded` 表示程序集是否包含单文件资源，`webUi.enabled` 表示当前 `enableWebUi` 设置为 true 且资源存在。每次读取都会对照 Host 配置核实 HostRoute listener 状态；Host 配置暂时不可读时返回 `503 unavailable`。
+
 
 ```json
 {
@@ -460,11 +491,45 @@ curl --fail-with-body \
       "httpJson": { "enabled": false, "running": false },
       "grpc": { "enabled": false, "running": false },
       "unixSocket": { "enabled": false, "running": false }
+    },
+    "webUi": {
+      "embedded": true,
+      "enabled": true
+    },
+    "host": {
+      "nodeId": "node-a",
+      "readOnly": false,
+      "extensionsSkipped": false,
+      "supervisorDisabled": false,
+      "databaseAvailable": true,
+      "snapshotAvailable": true,
+      "configurationValid": true,
+      "publishedConfigurationVersion": 42,
+      "lastSnapshotState": "accepted",
+      "lastSnapshotStateAt": "2026-08-24T01:25:00.0000000+00:00",
+      "readiness": "ready"
     }
   },
   "version": null
 }
 ```
+
+`host` 只在 Host API `>=1.3.3` 且 `ExtensionHostInfoSnapshot` 可用时返回对象；Host API 低于 `1.3.3`，或 Host 尚未提供有效快照时为 `null`。字段均为非敏感状态：`nodeId` 可为 `null`，`publishedConfigurationVersion` 和 `lastSnapshotStateAt` 可为 `null`；`lastSnapshotState` 的值为 `unknown`、`accepted` 或 `rejected`，`readiness` 的值为 `unknown`、`unready`、`ready` 或 `degraded`。
+
+| 字段 | 语义 |
+| --- | --- |
+| `nodeId` | Host 稳定节点 ID，未知时为 `null` |
+| `readOnly` | Host 是否禁用配置写入 |
+| `extensionsSkipped` | Host 是否禁用 extension 加载 |
+| `supervisorDisabled` | Host 是否禁用 service supervision |
+| `databaseAvailable` | 最近一次运行操作中数据库是否可用 |
+| `snapshotAvailable` | 当前是否发布完整配置快照 |
+| `configurationValid` | 当前发布配置是否有效 |
+| `publishedConfigurationVersion` | 发布配置版本，未知时为 `null` |
+| `lastSnapshotState` | 最近快照结果：`unknown`、`accepted` 或 `rejected` |
+| `lastSnapshotStateAt` | 最近快照状态变更时间，未知时为 `null` |
+| `readiness` | Host readiness：`unknown`、`unready`、`ready` 或 `degraded` |
+
 
 `POST /v1/controller/reload-settings` 从 Host 重新读取 `nekolla.nekostick.controller` extension settings，并在不重新加载 extension 的情况下应用它们。请求 body 必须为空，并且必须恰好包含一个强聚合 `If-Match`；先读取任一持久化配置资源的 ETag，再提交重载：
 
@@ -477,7 +542,7 @@ curl --fail-with-body \
   "$BASE/v1/controller/reload-settings"
 ```
 
-成功响应为 `200 ok`，`data` 使用与 state endpoint 相同的 `bootstrapMode` 和 `listeners` 形状；响应 ETag 和 envelope `version` 是本次 Host snapshot 读取使用的当前聚合版本。重载本身不会写回持久化配置。listener enablement、以及可安全协调的 HTTP/gRPC 端口和 HostRoute/Unix socket 路径变化会热应用，无需 extension reload。成功切换 API key 后新 key 立即生效，旧 key 立即失效；任何 key 都不会出现在响应或日志中。
+成功响应为 `200 ok`，`data` 使用与 state endpoint 相同的 `bootstrapMode` 和 `listeners` 形状，并同时包含 `webUi` 对象（该路径不同步读取 Host 快照，`host` 字段恒为 `null`，Host 信息仅在 `GET /v1/controller/state` 返回）；响应 ETag 和 envelope `version` 是本次 Host snapshot 读取使用的当前聚合版本。重载本身不会写回持久化配置。listener enablement、以及可安全协调的 HTTP/gRPC 端口和 HostRoute/Unix socket 路径变化会热应用，无需 extension reload。成功切换 API key 后新 key 立即生效，旧 key 立即失效；任何 key 都不会出现在响应或日志中。
 
 重载是串行化的：执行期间其他配置写操作会排队等待，listener 切换期间新请求可能短暂收到 `503 unavailable`。如果重载停止或更换了承载该请求本身的 listener（例如关闭对应传输或修改端口），`200` 响应可能无法送达；此时通过其余 listener 的 state endpoint 确认重载结果。
 

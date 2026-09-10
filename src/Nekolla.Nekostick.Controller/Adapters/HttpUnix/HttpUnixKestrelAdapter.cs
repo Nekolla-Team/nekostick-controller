@@ -301,30 +301,36 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
                     if (!corsOrigins.IsEmpty)
                     {
                         // Preflight OPTIONS is answered by the middleware before the terminal
-                        // handler, so cross-origin probes never reach the API key check.
-                        application.UseCors(policy =>
-                        {
-                            if (corsOrigins.Contains("*", StringComparer.Ordinal))
+                        // handler, so cross-origin probes never reach the API key check. The
+                        // unauthenticated Web UI shell is intentionally outside CORS handling.
+                        application.UseWhen(
+                            context => !ControllerWebUiResource.IsRootPath(context.Request.Path.Value ?? string.Empty),
+                            branch =>
                             {
-                                policy.AllowAnyOrigin();
-                            }
-                            else
-                            {
-                                policy.WithOrigins(corsOrigins.ToArray());
-                            }
+                                branch.UseCors(policy =>
+                                {
+                                    if (corsOrigins.Contains("*", StringComparer.Ordinal))
+                                    {
+                                        policy.AllowAnyOrigin();
+                                    }
+                                    else
+                                    {
+                                        policy.WithOrigins(corsOrigins.ToArray());
+                                    }
 
-                            policy.WithMethods("GET", "POST", "PUT", "DELETE", "PATCH");
-                            policy.WithHeaders(
-                                "Content-Type",
-                                ControllerManagementApiContract.IfMatchHeaderName,
-                                ControllerManagementApiContract.ApiKeyHeaderName);
-                            policy.WithExposedHeaders(
-                                ControllerManagementApiContract.ETagHeaderName,
-                                ControllerManagementApiContract.LocationHeaderName);
-                        });
+                                    policy.WithMethods("GET", "POST", "PUT", "DELETE", "PATCH");
+                                    policy.WithHeaders(
+                                        "Content-Type",
+                                        ControllerManagementApiContract.IfMatchHeaderName,
+                                        ControllerManagementApiContract.ApiKeyHeaderName);
+                                    policy.WithExposedHeaders(
+                                        ControllerManagementApiContract.ETagHeaderName,
+                                        ControllerManagementApiContract.LocationHeaderName);
+                                });
+                            });
                     }
 
-                    application.Run(context => HandleRequestAsync(context, dispatcher));
+                    application.Run(context => HandleRequestAsync(context, dispatcher, options));
                 });
             });
 
@@ -333,12 +339,36 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
 
     private async Task HandleRequestAsync(
         HttpContext context,
-        IControllerManagementDispatcher dispatcher)
+        IControllerManagementDispatcher dispatcher,
+        ControllerOptions startupOptions)
     {
         var cancellationToken = context.RequestAborted;
         if (cancellationToken.IsCancellationRequested)
         {
             return;
+        }
+
+        var requestPath = context.Request.Path.Value ?? string.Empty;
+        if (string.Equals(context.Request.Method, "GET", StringComparison.OrdinalIgnoreCase) &&
+            ControllerWebUiResource.IsRootPath(requestPath) &&
+            ControllerManagementDispatcherOptions.GetCurrent(dispatcher, startupOptions).EnableWebUi)
+        {
+            var resource = ControllerWebUiResource.OpenRead();
+            if (resource is not null)
+            {
+                try
+                {
+                    await WriteWebUiResponseAsync(context, resource, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                }
+                catch (IOException) when (!cancellationToken.IsCancellationRequested)
+                {
+                }
+
+                return;
+            }
         }
 
         if (context.Request.ContentLength is > ControllerAdmissionLimits.MaximumRequestBodyBytes)
@@ -355,7 +385,7 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
             return;
         }
 
-        var path = context.Request.Path.Value ?? string.Empty;
+        var path = requestPath;
         if (context.Request.QueryString.HasValue)
         {
             // Preserve the query in the transport-neutral path. The canonical core currently
@@ -417,6 +447,19 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
         }
     }
 
+    private static async ValueTask WriteWebUiResponseAsync(
+        HttpContext context,
+        Stream resource,
+        CancellationToken cancellationToken)
+    {
+        await using (resource.ConfigureAwait(false))
+        {
+            context.Response.StatusCode = StatusCodes.Status200OK;
+            context.Response.ContentType = "text/html";
+            context.Response.ContentLength = resource.Length;
+            await resource.CopyToAsync(context.Response.Body, cancellationToken).ConfigureAwait(false);
+        }
+    }
 
     private static async ValueTask<int> ReadBodyAsync(
         HttpRequest request,

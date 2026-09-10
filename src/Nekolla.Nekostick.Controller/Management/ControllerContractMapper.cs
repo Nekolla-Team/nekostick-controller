@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Nekolla.Nekostick.Contracts;
@@ -58,6 +59,15 @@ internal static class ControllerContractMapper
         IsRunning = source.IsRunning, ManifestVersion = source.ManifestVersion
     };
 
+    /// <summary>Maps an API 1.3.3 extension management entry, including its content hash.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static ControllerExtensionRecordReadDto ToReadApi133(ExtensionManagementEntry source) => new()
+    {
+        ExtensionId = source.ExtensionId, Version = source.InstalledVersion, LoadState = (ControllerExtensionLoadState)source.LoadState,
+        CreatedAt = source.CreatedAt, UpdatedAt = source.UpdatedAt, RecordVersion = source.RecordVersion,
+        IsRunning = source.IsRunning, ManifestVersion = source.ManifestVersion, ContentHash = source.ContentHash
+    };
+
     internal static ControllerExtensionRefreshReadDto ToRead(ExtensionRefreshSummary source) => new()
     {
         Added = source.Added, VersionUpdated = source.VersionUpdated, Missing = source.Missing
@@ -67,6 +77,14 @@ internal static class ControllerContractMapper
     {
         ExtensionId = source.ExtensionId, Version = source.Version, LoadState = (ControllerExtensionLoadState)source.LoadState,
         CreatedAt = source.CreatedAt, UpdatedAt = source.UpdatedAt, RecordVersion = source.RecordVersion
+    };
+
+    /// <summary>Maps an API 1.3.3 extension record configuration, including its content hash.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static ControllerExtensionRecordReadDto ToReadApi133(ExtensionRecordConfiguration source) => new()
+    {
+        ExtensionId = source.ExtensionId, Version = source.Version, LoadState = (ControllerExtensionLoadState)source.LoadState,
+        CreatedAt = source.CreatedAt, UpdatedAt = source.UpdatedAt, RecordVersion = source.RecordVersion, ContentHash = source.ContentHash
     };
 
     internal static ControllerExtensionSettingsReadDto ToRead(ExtensionSettingsConfiguration source)

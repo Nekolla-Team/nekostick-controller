@@ -267,7 +267,8 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
             HostRoutePath = "/controller" + suffix,
             ApiKey = secret,
             ApiScope = ControllerApiScope.FullConfiguration,
-            CorsAllowedOrigins = hydratedOptions.CorsAllowedOrigins
+            CorsAllowedOrigins = hydratedOptions.CorsAllowedOrigins,
+            EnableWebUi = hydratedOptions.EnableWebUi,
         };
         return _bootstrapOptions;
     }

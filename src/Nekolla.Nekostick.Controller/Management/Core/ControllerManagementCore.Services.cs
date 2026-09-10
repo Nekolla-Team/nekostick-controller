@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using Nekolla.Nekostick.Contracts;
 
 namespace Nekolla.Nekostick.Controller.Management;
@@ -35,6 +36,51 @@ internal sealed partial class ControllerManagementCore
             ? ControllerManagementResponseBuilder.SuccessUnversioned(ControllerContractMapper.ToRead(snapshot))
             : ControllerManagementResponseBuilder.NotFound;
     }
+
+    private async ValueTask<ControllerManagementResponse> WriteServiceRuntimeAsync(
+        ControllerManagementRequest request,
+        string method,
+        Guid serviceId,
+        string action,
+        CancellationToken cancellationToken)
+    {
+        if (method != "POST") return ControllerManagementResponseBuilder.MethodNotAllowed;
+        if (!RequireNoIfMatch(request) || !RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
+        if (_bridge is not IExtensionHostBridge13 bridge13 || !ExtensionHostApiSupport.IsApi133Supported(bridge13.ApiVersion))
+        {
+            return ControllerManagementResponseBuilder.Unsupported;
+        }
+
+        var write = action == "resume"
+            ? await ResumeServiceRuntimeAsync(bridge13, serviceId, cancellationToken).ConfigureAwait(false)
+            : await RestartServiceRuntimeAsync(bridge13, serviceId, cancellationToken).ConfigureAwait(false);
+        if (!write.IsSuccess) return ControllerManagementResponseBuilder.FromConfigurationErrors(write.Errors);
+        return MapServiceRuntimeActionResult(action, write);
+
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static ControllerManagementResponse MapServiceRuntimeActionResult(string action, ConfigurationWriteResult write)
+    {
+        var outcome = action == "resume"
+            ? write.IsNoOp ? "ignored" : "resumed"
+            : "restarted";
+        return ControllerManagementResponseBuilder.SuccessUnversioned(new ControllerServiceRuntimeActionReadDto { Outcome = outcome });
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static ValueTask<ConfigurationWriteResult> ResumeServiceRuntimeAsync(
+        IExtensionHostBridge13 bridge13,
+        Guid serviceId,
+        CancellationToken cancellationToken) =>
+        bridge13.Supervisor.ResumeAsync(serviceId, cancellationToken);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static ValueTask<ConfigurationWriteResult> RestartServiceRuntimeAsync(
+        IExtensionHostBridge13 bridge13,
+        Guid serviceId,
+        CancellationToken cancellationToken) =>
+        bridge13.Supervisor.RestartAsync(serviceId, cancellationToken);
 
     private async ValueTask<ControllerManagementResponse> ReadServiceAsync(ControllerManagementRequest request, Guid serviceId, CancellationToken cancellationToken)
     {

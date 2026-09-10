@@ -11,6 +11,29 @@ public interface IControllerManagementDispatcher
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>Exposes the atomically active immutable options to transport request handlers.</summary>
+internal interface IControllerManagementOptionsAccessor
+{
+    /// <summary>Gets the current options snapshot.</summary>
+    ControllerOptions CurrentOptions { get; }
+}
+
+/// <summary>Reads the active options through the concrete dispatcher when available.</summary>
+internal static class ControllerManagementDispatcherOptions
+{
+    /// <summary>Returns the active dispatcher options, or the startup fallback for test seams.</summary>
+    internal static ControllerOptions GetCurrent(
+        IControllerManagementDispatcher dispatcher,
+        ControllerOptions fallback)
+    {
+        ArgumentNullException.ThrowIfNull(dispatcher);
+        ArgumentNullException.ThrowIfNull(fallback);
+        return dispatcher is IControllerManagementOptionsAccessor accessor
+            ? accessor.CurrentOptions
+            : fallback;
+    }
+}
+
 /// <summary>
 /// Defines the lifecycle contract implemented by future transport adapters.
 /// </summary>
@@ -52,4 +75,12 @@ public interface IControllerManagementHandlerFactory
     IExtensionHandler Create(
         IControllerManagementDispatcher dispatcher,
         ControllerOptions options);
+
+    /// <summary>Creates a streaming handler when the host supports the streaming registration API.</summary>
+    /// <param name="dispatcher">Dispatcher that processes management requests.</param>
+    /// <param name="options">Controller options used by the handler.</param>
+    /// <returns>A streaming handler, or <see langword="null" /> when streaming is unavailable.</returns>
+    IExtensionStreamingHandler? CreateStreaming(
+        IControllerManagementDispatcher dispatcher,
+        ControllerOptions options) => null;
 }

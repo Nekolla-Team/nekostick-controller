@@ -156,6 +156,8 @@ internal sealed partial class ControllerManagementCore
                 "DELETE" => await DeleteRouteAsync(request, routeId, cancellationToken).ConfigureAwait(false),
                 _ => ControllerManagementResponseBuilder.MethodNotAllowed
             };
+        if (TryGetServiceRuntimeActionPath(path, out var runtimeActionServiceId, out var runtimeAction))
+            return await WriteServiceRuntimeAsync(request, method, runtimeActionServiceId, runtimeAction, cancellationToken).ConfigureAwait(false);
         if (TryGetServiceRuntimePath(path, out var runtimeServiceId))
             return method == "GET" ? await ReadServiceRuntimeAsync(request, runtimeServiceId, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
 
@@ -337,6 +339,29 @@ internal sealed partial class ControllerManagementCore
         if (!path.StartsWith(prefix + "/", StringComparison.Ordinal)) return false;
         var suffix = path[(prefix.Length + 1)..];
         return suffix.Length > 0 && !suffix.Contains('/', StringComparison.Ordinal) && Guid.TryParse(suffix, out id);
+    }
+
+    private static bool TryGetServiceRuntimeActionPath(string path, out Guid id, out string action)
+    {
+        id = default;
+        action = string.Empty;
+        var prefix = ControllerManagementApiContract.ServicesPath + "/";
+        if (!path.StartsWith(prefix, StringComparison.Ordinal)) return false;
+        var suffix = path[prefix.Length..];
+        const string tail = "/runtime/";
+        var separator = suffix.IndexOf(tail, StringComparison.Ordinal);
+        if (separator <= 0) return false;
+        var idText = suffix[..separator];
+        var actionText = suffix[(separator + tail.Length)..];
+        if (idText.Contains('/', StringComparison.Ordinal) || !Guid.TryParse(idText, out id)) return false;
+        if (actionText is not ("resume" or "restart") || actionText.Contains('/', StringComparison.Ordinal))
+        {
+            id = default;
+            return false;
+        }
+
+        action = actionText;
+        return true;
     }
 
     private static bool TryGetServiceRuntimePath(string path, out Guid id)

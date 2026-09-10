@@ -23,6 +23,10 @@ public static class ControllerManagementApiContract
     public const string ServicesRuntimePath = "/v1/services/runtime";
     /// <summary>Template path for one service runtime telemetry snapshot.</summary>
     public const string ServiceRuntimePath = "/v1/services/{id}/runtime";
+    /// <summary>Template path for resuming one service on the local host.</summary>
+    public const string ServiceRuntimeResumePath = "/v1/services/{id}/runtime/resume";
+    /// <summary>Template path for strictly restarting one service on the local host.</summary>
+    public const string ServiceRuntimeRestartPath = "/v1/services/{id}/runtime/restart";
     /// <summary>Path for extension operations.</summary>
     public const string ExtensionsPath = "/v1/extensions";
     /// <summary>Path of the extension directory refresh endpoint.</summary>

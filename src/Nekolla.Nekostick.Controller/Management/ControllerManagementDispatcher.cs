@@ -3,7 +3,8 @@ using Nekolla.Nekostick.Contracts;
 namespace Nekolla.Nekostick.Controller.Management;
 
 /// <summary>Provides the foundation dispatcher and admission checks.</summary>
-public sealed class ControllerManagementDispatcher : IControllerManagementDispatcher, IDisposable
+public sealed class ControllerManagementDispatcher : IControllerManagementDispatcher, IControllerManagementOptionsAccessor, IDisposable
+
 {
     private sealed class DispatcherConfiguration
     {
@@ -77,6 +78,8 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
 
     /// <summary>Gets the active dispatcher options for runtime reconciliation.</summary>
     internal ControllerOptions Options => Volatile.Read(ref _configuration).Options;
+
+    ControllerOptions IControllerManagementOptionsAccessor.CurrentOptions => Options;
 
     /// <summary>Gets the shared gate serializing configuration mutations and reload.</summary>
     internal SemaphoreSlim MutationGate => _mutationGate;

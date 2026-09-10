@@ -21,7 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Nekolla.Nekostick.Contracts" Version="1.3.1" />
+    <PackageReference Include="Nekolla.Nekostick.Contracts" Version="1.3.3" />
     <PackageReference Include="Google.Protobuf" Version="3.27.2" />
     <PackageReference Include="Grpc.Core.Api" Version="2.66.0" />
     <PackageReference Include="Grpc.Tools" Version="2.66.0" PrivateAssets="All" />
@@ -32,4 +32,12 @@
     <Protobuf Include="Protos/controller_management.proto" GrpcServices="Server" />
     <None Update="manifest.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+  <ItemGroup Condition="'$(IncludeWebUi)'=='true'">
+    <EmbeddedResource Include="..\..\webui\dist-embedded\index.html" LogicalName="Nekolla.Nekostick.Controller.WebUi.index.html" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Nekolla.Nekostick.Controller.IntegrationTests" />
+  </ItemGroup>
+
 </Project>
+

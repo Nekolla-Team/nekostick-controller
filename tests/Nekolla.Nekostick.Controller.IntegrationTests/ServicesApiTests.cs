@@ -189,6 +189,47 @@ public sealed class ServicesApiTests(ControllerApiFixture fixture) : IClassFixtu
         AssertErrorEnvelope(unknownDocument.RootElement, "not_found");
     }
 
+    [Fact]
+    public async Task ServiceRuntime_WaitingLifecycleSerializesAsWaiting()
+    {
+        using var client = fixture.CreateHttpClient();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var serviceId = await CreateServiceAsync(client, cancellationToken);
+        fixture.Host.SetSupervisorSnapshots(ImmutableArray.Create(new ExtensionServiceRuntimeSnapshot(
+            serviceId,
+            1234,
+            DateTimeOffset.UtcNow,
+            TimeSpan.Zero,
+            ExtensionServiceLifecycleState.Waiting,
+            ExtensionServiceHealthState.Unknown,
+            0,
+            0,
+            DateTimeOffset.UtcNow,
+            null,
+            null)));
+
+        using var response = await client.GetAsync($"/v1/services/{serviceId}/runtime", cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        Assert.Equal("waiting", document.RootElement.GetProperty("data").GetProperty("lifecycleState").GetString());
+    }
+
+    [Theory]
+    [InlineData("resume")]
+    [InlineData("restart")]
+    public async Task ServiceRuntimeActions_OnPre133HostReturnUnsupported(string action)
+    {
+        using var client = fixture.CreateHttpClient();
+        using var response = await client.PostAsync(
+            $"/v1/services/{Guid.CreateVersion7()}/runtime/{action}",
+            content: null,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal((HttpStatusCode)501, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        AssertErrorEnvelope(document.RootElement, "unsupported");
+    }
+
     private static async Task<Guid> CreateServiceAsync(HttpClient client, CancellationToken cancellationToken)
     {
         var etag = await ReadEtagAsync(client, "/v1/services", cancellationToken);
@@ -239,6 +280,147 @@ public sealed class ServicesApiTests(ControllerApiFixture fixture) : IClassFixtu
         Assert.StartsWith("\"", etag);
         Assert.EndsWith("\"", etag);
         return etag;
+    }
+
+    private static void AssertSuccessfulEnvelope(JsonElement envelope)
+    {
+        Assert.Equal(1, envelope.GetProperty("apiVersion").GetInt32());
+        Assert.True(envelope.GetProperty("ok").GetBoolean());
+        Assert.Equal("ok", envelope.GetProperty("code").GetString());
+    }
+
+    private static void AssertErrorEnvelope(JsonElement envelope, string code)
+    {
+        Assert.Equal(1, envelope.GetProperty("apiVersion").GetInt32());
+        Assert.False(envelope.GetProperty("ok").GetBoolean());
+        Assert.Equal(code, envelope.GetProperty("code").GetString());
+    }
+}
+
+public sealed class ServiceRuntimeActionsApi133Tests(ControllerApi133Fixture fixture) : IClassFixture<ControllerApi133Fixture>
+{
+    [Fact]
+    public async Task ResumeServiceRuntime_ReturnsResumedThenIgnored()
+    {
+        using var client = fixture.CreateHttpClient();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var serviceId = await CreateServiceAsync(client, cancellationToken);
+        fixture.Host.SetSupervisorSnapshots(ImmutableArray.Create(CreateSnapshot(serviceId, ExtensionServiceLifecycleState.Waiting)));
+        var path = $"/v1/services/{serviceId}/runtime/resume";
+
+        using var resumed = await client.PostAsync(path, content: null, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resumed.StatusCode);
+        using var resumedDocument = JsonDocument.Parse(await resumed.Content.ReadAsStringAsync(cancellationToken));
+        Assert.Equal("resumed", resumedDocument.RootElement.GetProperty("data").GetProperty("outcome").GetString());
+
+        using var ignored = await client.PostAsync(path, content: null, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, ignored.StatusCode);
+        using var ignoredDocument = JsonDocument.Parse(await ignored.Content.ReadAsStringAsync(cancellationToken));
+        Assert.Equal("ignored", ignoredDocument.RootElement.GetProperty("data").GetProperty("outcome").GetString());
+    }
+
+    [Fact]
+    public async Task ResumeServiceRuntime_UnknownServiceReturnsNotFound()
+    {
+        using var client = fixture.CreateHttpClient();
+        using var response = await client.PostAsync(
+            $"/v1/services/{Guid.CreateVersion7()}/runtime/resume",
+            content: null,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        AssertErrorEnvelope(document.RootElement, "not_found");
+    }
+
+    [Fact]
+    public async Task RestartServiceRuntime_ReturnsRestarted()
+    {
+        using var client = fixture.CreateHttpClient();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var serviceId = await CreateServiceAsync(client, cancellationToken);
+        fixture.Host.SetSupervisorSnapshots(ImmutableArray.Create(CreateSnapshot(serviceId, ExtensionServiceLifecycleState.Running)));
+
+        using var response = await client.PostAsync(
+            $"/v1/services/{serviceId}/runtime/restart",
+            content: null,
+            cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        Assert.Equal("restarted", document.RootElement.GetProperty("data").GetProperty("outcome").GetString());
+    }
+
+    [Theory]
+    [InlineData("resume")]
+    [InlineData("restart")]
+    public async Task ServiceRuntimeActions_WithIfMatchOrBody_ReturnsInvalidRequest(string action)
+    {
+        using var client = fixture.CreateHttpClient();
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/v1/services/{Guid.CreateVersion7()}/runtime/{action}")
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json")
+        };
+        request.Headers.TryAddWithoutValidation(ControllerManagementApiContract.IfMatchHeaderName, "\"1\"");
+
+        using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        AssertErrorEnvelope(document.RootElement, "invalid_request");
+    }
+
+    private static ExtensionServiceRuntimeSnapshot CreateSnapshot(Guid serviceId, ExtensionServiceLifecycleState lifecycleState)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new ExtensionServiceRuntimeSnapshot(
+            serviceId,
+            1234,
+            now,
+            TimeSpan.Zero,
+            lifecycleState,
+            ExtensionServiceHealthState.Healthy,
+            0,
+            0,
+            now,
+            now,
+            null);
+    }
+
+    private static async Task<Guid> CreateServiceAsync(HttpClient client, CancellationToken cancellationToken)
+    {
+        var etag = await ReadEtagAsync(client, "/v1/services", cancellationToken);
+        const string body = """
+        {
+            "enabled": true,
+            "fileName": "/bin/echo",
+            "argumentList": ["hello"],
+            "workingDirectory": "/tmp",
+            "environment": { "KEY": "value1" },
+            "startMode": "eager",
+            "restartPolicy": "never",
+            "healthCheck": { "type": "process", "timeoutMs": 5000 }
+        }
+        """;
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/services")
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json")
+        };
+        request.Headers.TryAddWithoutValidation(ControllerManagementApiContract.IfMatchHeaderName, etag);
+        using var response = await client.SendAsync(request, cancellationToken);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        AssertSuccessfulEnvelope(document.RootElement);
+        return document.RootElement.GetProperty("data").GetProperty("id").GetGuid();
+    }
+
+    private static async Task<string> ReadEtagAsync(HttpClient client, string path, CancellationToken cancellationToken)
+    {
+        using var response = await client.GetAsync(path, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.TryGetValues(ControllerManagementApiContract.ETagHeaderName, out var values));
+        return Assert.Single(values);
     }
 
     private static void AssertSuccessfulEnvelope(JsonElement envelope)

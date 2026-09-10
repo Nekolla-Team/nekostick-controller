@@ -23,6 +23,8 @@ public sealed class ControllerExtensionRecordReadDto
     [JsonPropertyName("isRunning")] public bool IsRunning { get; init; }
     /// <summary>Manifest version observed by the latest directory scan; null when the manifest is missing.</summary>
     [JsonPropertyName("manifestVersion")] public string? ManifestVersion { get; init; }
+    /// <summary>Optional SHA-256 digest of the installed extension content.</summary>
+    [JsonPropertyName("contentHash")] public string? ContentHash { get; init; }
 }
 
 /// <summary>Read representation of an extension directory refresh summary.</summary>

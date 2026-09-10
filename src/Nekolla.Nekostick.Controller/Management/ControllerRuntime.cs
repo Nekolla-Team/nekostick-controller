@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Nekolla.Nekostick.Contracts;
 using Nekolla.Nekostick.Controller.Adapters.Grpc;
 using Nekolla.Nekostick.Controller.Adapters.HttpUnix;
@@ -122,20 +123,63 @@ internal sealed class ControllerRuntime
                 string.Equals(route.Matcher.Pattern, path, StringComparison.Ordinal));
         }
 
-        return BuildState(options, hostRouteRunning);
+        var hostInfo = _bridge is IExtensionHostBridge13 bridge13 && ExtensionHostApiSupport.IsApi133Supported(bridge13.ApiVersion)
+            ? ReadHostInfo(bridge13)
+            : null;
+        return BuildState(options, hostRouteRunning, hostInfo);
     }
 
-    private ControllerStateDto BuildState(ControllerOptions options, bool hostRouteRunning) => new()
+    private ControllerStateDto BuildState(ControllerOptions options, bool hostRouteRunning, ControllerHostInfoDto? host = null)
     {
-        BootstrapMode = IsEphemeralBootstrap,
-        Listeners = new ControllerListenersStateDto
+        var embedded = ControllerWebUiResource.IsEmbedded;
+        return new ControllerStateDto
         {
-            HostRoute = new ControllerListenerStateDto { Enabled = options.EnableHostRoute, Running = hostRouteRunning },
-            HttpJson = new ControllerListenerStateDto { Enabled = options.EnableHttpJson, Running = IsAdapterStarted(ControllerTransport.HttpJson) },
-            Grpc = new ControllerListenerStateDto { Enabled = options.EnableGrpc, Running = IsAdapterStarted(ControllerTransport.Grpc) },
-            UnixSocket = new ControllerListenerStateDto { Enabled = options.EnableUnixSocket, Running = IsAdapterStarted(ControllerTransport.UnixSocket) }
-        }
-    };
+            BootstrapMode = IsEphemeralBootstrap,
+            Listeners = new ControllerListenersStateDto
+            {
+                HostRoute = new ControllerListenerStateDto { Enabled = options.EnableHostRoute, Running = hostRouteRunning },
+                HttpJson = new ControllerListenerStateDto { Enabled = options.EnableHttpJson, Running = IsAdapterStarted(ControllerTransport.HttpJson) },
+                Grpc = new ControllerListenerStateDto { Enabled = options.EnableGrpc, Running = IsAdapterStarted(ControllerTransport.Grpc) },
+                UnixSocket = new ControllerListenerStateDto { Enabled = options.EnableUnixSocket, Running = IsAdapterStarted(ControllerTransport.UnixSocket) }
+            },
+            WebUi = new ControllerWebUiStateDto { Embedded = embedded, Enabled = options.EnableWebUi && embedded },
+            Host = host
+        };
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static ControllerHostInfoDto? ReadHostInfo(IExtensionHostBridge13 bridge13)
+    {
+        var snapshot = bridge13.HostInfo;
+        if (ReferenceEquals(snapshot, ExtensionHostInfoSnapshot.Unavailable)) return null;
+
+        return new ControllerHostInfoDto
+        {
+            NodeId = snapshot.NodeId,
+            ReadOnly = snapshot.ReadOnly,
+            ExtensionsSkipped = snapshot.ExtensionsSkipped,
+            SupervisorDisabled = snapshot.SupervisorDisabled,
+            DatabaseAvailable = snapshot.DatabaseAvailable,
+            SnapshotAvailable = snapshot.SnapshotAvailable,
+            ConfigurationValid = snapshot.ConfigurationValid,
+            PublishedConfigurationVersion = snapshot.PublishedConfigurationVersion,
+            LastSnapshotState = snapshot.LastSnapshotState switch
+            {
+                ExtensionHostSnapshotState.Accepted => ControllerHostSnapshotState.Accepted,
+                ExtensionHostSnapshotState.Rejected => ControllerHostSnapshotState.Rejected,
+                _ => ControllerHostSnapshotState.Unknown
+            },
+            LastSnapshotStateAt = snapshot.LastSnapshotStateAt,
+            Readiness = snapshot.Readiness switch
+            {
+                ExtensionHostReadinessState.Unready => ControllerHostReadinessState.Unready,
+                ExtensionHostReadinessState.Ready => ControllerHostReadinessState.Ready,
+                ExtensionHostReadinessState.Degraded => ControllerHostReadinessState.Degraded,
+                _ => ControllerHostReadinessState.Unknown
+            }
+        };
+    }
+
 
     private bool IsAdapterStarted(ControllerTransport transport) =>
         _transportAdapters.Any(adapter => adapter.Transport == transport && adapter.IsStarted);
@@ -225,44 +269,64 @@ internal sealed class ControllerRuntime
                 }
                 else
                 {
-                    if (registration is null || handlerFactory is null)
+                    if (registration is null)
                     {
-                        throw new InvalidOperationException("HostRoute requires a management handler registration seam.");
+                        throw new InvalidOperationException("The HostRoute registration is unavailable.");
                     }
 
-                    var handler = handlerFactory.Create(Dispatcher, _options)
-                        ?? throw new InvalidOperationException("The management handler factory returned no handler.");
-                    if (string.IsNullOrWhiteSpace(handler.HandlerId))
+                    if (handlerFactory is null)
                     {
-                        throw new InvalidOperationException("The management handler has no stable identifier.");
+                        throw new InvalidOperationException("The HostRoute handler factory is unavailable.");
                     }
 
-                    if (IsEphemeralBootstrap && !string.Equals(handler.HandlerId, ControllerManagementApiContract.HandlerId, StringComparison.Ordinal))
+                    string? handlerId = null;
+                    var streamingRegistered = _bridge is IExtensionHostBridge13 bridge13 &&
+                        ExtensionHostApiSupport.IsStreamingSupported(bridge13.ApiVersion) &&
+                        TryRegisterStreamingHandlerGated(
+                            registration,
+                            handlerFactory,
+                            Dispatcher,
+                            _options,
+                            IsEphemeralBootstrap,
+                            out handlerId);
+                    if (!streamingRegistered)
+                    {
+                        var handler = handlerFactory.Create(Dispatcher, _options)
+                            ?? throw new InvalidOperationException("The management handler factory returned no handler.");
+                        if (string.IsNullOrWhiteSpace(handler.HandlerId))
+                        {
+                            throw new InvalidOperationException("The management handler has no stable identifier.");
+                        }
+
+                        if (!registration.TryRegisterHandler(handler))
+                        {
+                            throw new InvalidOperationException("The management handler registration was rejected.");
+                        }
+
+                        handlerId = handler.HandlerId;
+                    }
+
+                    if (handlerId is null ||
+                        (IsEphemeralBootstrap && !string.Equals(handlerId, ControllerManagementApiContract.HandlerId, StringComparison.Ordinal)))
                     {
                         throw new InvalidOperationException("The ephemeral bootstrap handler identity is not fixed.");
                     }
 
-
-                    if (!registration.TryRegisterHandler(handler))
-                    {
-                        throw new InvalidOperationException("The management handler registration was rejected.");
-                    }
-
                     _registration = registration;
-                    _handlerId = handler.HandlerId;
+                    _handlerId = handlerId;
                     if (IsEphemeralBootstrap)
                     {
                         if (!_staleBootstrapRoutesCleaned)
                         {
                             await Dispatcher.CleanupStaleBootstrapRoutesAsync(
-                                handler.HandlerId,
+                                handlerId,
                                 cancellationToken).ConfigureAwait(false);
                             _staleBootstrapRoutesCleaned = true;
                         }
 
                         _bootstrapRouteCleanupPending = true;
                         var provisionedIdentity = await Dispatcher.ProvisionBootstrapRouteAsync(
-                            handler.HandlerId,
+                            handlerId,
                             cancellationToken).ConfigureAwait(false);
                         if (provisionedIdentity is not { } identity)
                         {
@@ -275,7 +339,7 @@ internal sealed class ControllerRuntime
                     }
                     else
                     {
-                        await Dispatcher.ProvisionHostRouteAsync(handler.HandlerId, cancellationToken)
+                        await Dispatcher.ProvisionHostRouteAsync(handlerId, cancellationToken)
                             .ConfigureAwait(false);
                         _hostRouteRunning = true;
                     }
@@ -724,6 +788,42 @@ internal sealed class ControllerRuntime
             Interlocked.Exchange(ref _state, 1);
             throw;
         }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static bool TryRegisterStreamingHandlerGated(
+        IExtensionRegistration registration,
+        IControllerManagementHandlerFactory handlerFactory,
+        IControllerManagementDispatcher dispatcher,
+        ControllerOptions options,
+        bool requireControllerHandlerId,
+        out string? handlerId)
+    {
+        handlerId = null;
+        var handler = handlerFactory.CreateStreaming(dispatcher, options);
+        if (handler is null)
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(handler.HandlerId))
+        {
+            throw new InvalidOperationException("The streaming management handler has no stable identifier.");
+        }
+
+        if (requireControllerHandlerId &&
+            !string.Equals(handler.HandlerId, ControllerManagementApiContract.HandlerId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("The ephemeral bootstrap handler identity is not fixed.");
+        }
+
+        if (!registration.TryRegisterStreamingHandler(handler))
+        {
+            throw new InvalidOperationException("The streaming management handler registration was rejected.");
+        }
+
+        handlerId = handler.HandlerId;
+        return true;
     }
 
     private static IControllerTransportAdapter[] CreateDefaultTransportAdapters() =>
