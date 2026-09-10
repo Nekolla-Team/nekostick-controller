@@ -4,6 +4,7 @@ export const extensions = {
   columns: {
     extensionId: 'Extension ID',
     version: 'Version',
+    contentHash: 'Content hash',
     loadState: 'Load state',
     running: 'Running',
     manifestDrift: 'On-disk {version}',

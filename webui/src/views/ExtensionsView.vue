@@ -160,6 +160,11 @@ function loadStateTagType(loadState: ExtensionRecord['loadState']): 'success' | 
   return 'default'
 }
 
+function displayContentHash(hash: string | null): string {
+  if (hash === null) return '—'
+  return hash.length > 28 ? `${hash.slice(0, 20)}…${hash.slice(-8)}` : hash
+}
+
 const columns = computed<DataTableColumns<ExtensionRecord>>(() => [
   { title: t('extensions.columns.extensionId'), key: 'extensionId' },
   {
@@ -172,6 +177,13 @@ const columns = computed<DataTableColumns<ExtensionRecord>>(() => [
           : null,
       ],
     }),
+  },
+  {
+    title: t('extensions.columns.contentHash'), key: 'contentHash',
+    render: (row) => h('span', {
+      class: 'content-hash',
+      title: row.contentHash ?? undefined,
+    }, displayContentHash(row.contentHash)),
   },
   {
     title: t('extensions.columns.loadState'), key: 'loadState',
@@ -272,5 +284,8 @@ h1 {
 .page-heading p {
   color: var(--n-text-color-3);
   margin: 6px 0 0;
+}
+.content-hash {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
 }
 </style>

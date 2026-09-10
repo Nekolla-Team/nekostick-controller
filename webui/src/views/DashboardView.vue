@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { useMessage } from 'naive-ui'
-import { NAlert, NButton, NCard, NGrid, NGridItem, NSpin, NSpace, NTag } from 'naive-ui'
+import { NAlert, NButton, NCard, NDescriptions, NDescriptionsItem, NGrid, NGridItem, NSpin, NSpace, NTag } from 'naive-ui'
 import ApiErrorAlert from '../components/ApiErrorAlert.vue'
 import { ApiClientError } from '../api/client'
 import { reloadSettings, getState } from '../api/resources/controller'
@@ -55,6 +55,8 @@ const reloadUncertain = computed(() => {
   return error instanceof ApiClientError && (error.kind === 'network' || error.kind === 'unavailable')
 })
 const state = computed(() => stateQuery.data.value)
+const host = computed(() => state.value?.host ?? null)
+const webUi = computed(() => state.value?.webUi ?? null)
 const root = computed(() => rootQuery.data.value)
 const stateLoading = computed(() => stateQuery.isLoading.value)
 const rootLoading = computed(() => rootQuery.isLoading.value)
@@ -70,6 +72,23 @@ function listenerStateText(enabled: boolean, running: boolean): string {
   if (running) return t('dashboard.listener.state.running')
   if (enabled) return t('dashboard.listener.state.enabledNotRunning')
   return t('common.disabledState')
+}
+function booleanText(value: boolean): string {
+  return t(value ? 'common.yes' : 'common.no')
+}
+
+function snapshotStateText(value: string): string {
+  return t(`dashboard.host.snapshotStates.${value}`)
+}
+
+function readinessText(value: string): string {
+  return t(`dashboard.host.readinessStates.${value}`)
+}
+
+function formatDate(value: string | null): string {
+  if (!value) return t('common.unknown')
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString()
 }
 </script>
 
@@ -116,6 +135,59 @@ function listenerStateText(enabled: boolean, running: boolean): string {
       <n-tag :type="state.bootstrapMode ? 'warning' : 'success'">
         {{ t(state.bootstrapMode ? 'dashboard.mode.bootstrap' : 'dashboard.mode.configured') }}
       </n-tag>
+    </n-card>
+
+    <n-card v-if="host" :title="t('dashboard.host.title')">
+      <n-descriptions bordered :column="2">
+        <n-descriptions-item :label="t('dashboard.host.nodeId')">
+          {{ host.nodeId ?? t('common.unknown') }}
+        </n-descriptions-item>
+        <n-descriptions-item :label="t('dashboard.host.readOnly')">
+          {{ booleanText(host.readOnly) }}
+        </n-descriptions-item>
+        <n-descriptions-item :label="t('dashboard.host.extensionsSkipped')">
+          {{ booleanText(host.extensionsSkipped) }}
+        </n-descriptions-item>
+        <n-descriptions-item :label="t('dashboard.host.supervisorDisabled')">
+          {{ booleanText(host.supervisorDisabled) }}
+        </n-descriptions-item>
+        <n-descriptions-item :label="t('dashboard.host.databaseAvailable')">
+          {{ booleanText(host.databaseAvailable) }}
+        </n-descriptions-item>
+        <n-descriptions-item :label="t('dashboard.host.snapshotAvailable')">
+          {{ booleanText(host.snapshotAvailable) }}
+        </n-descriptions-item>
+        <n-descriptions-item :label="t('dashboard.host.configurationValid')">
+          {{ booleanText(host.configurationValid) }}
+        </n-descriptions-item>
+        <n-descriptions-item :label="t('dashboard.host.publishedConfigurationVersion')">
+          {{ host.publishedConfigurationVersion ?? t('common.unknown') }}
+        </n-descriptions-item>
+        <n-descriptions-item :label="t('dashboard.host.lastSnapshotState')">
+          {{ snapshotStateText(host.lastSnapshotState) }}
+        </n-descriptions-item>
+        <n-descriptions-item :label="t('dashboard.host.lastSnapshotStateAt')">
+          {{ formatDate(host.lastSnapshotStateAt) }}
+        </n-descriptions-item>
+        <n-descriptions-item :label="t('dashboard.host.readiness')">
+          {{ readinessText(host.readiness) }}
+        </n-descriptions-item>
+      </n-descriptions>
+    </n-card>
+
+    <n-card v-if="webUi" :title="t('dashboard.webUi.title')">
+      <n-descriptions bordered :column="2">
+        <n-descriptions-item :label="t('dashboard.webUi.embedded')">
+          <n-tag :type="webUi.embedded ? 'success' : 'default'" size="small">
+            {{ booleanText(webUi.embedded) }}
+          </n-tag>
+        </n-descriptions-item>
+        <n-descriptions-item :label="t('dashboard.webUi.enabled')">
+          <n-tag :type="webUi.enabled ? 'success' : 'default'" size="small">
+            {{ booleanText(webUi.enabled) }}
+          </n-tag>
+        </n-descriptions-item>
+      </n-descriptions>
     </n-card>
 
     <n-spin :show="rootLoading">

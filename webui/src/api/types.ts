@@ -33,7 +33,8 @@ export type ServiceLifecycleState =
   | 'Starting'
   | 'Running'
   | 'Stopping'
-  | 'Failed';
+  | 'Failed'
+  | 'waiting';
 export type ServiceHealthState = 'Unknown' | 'Healthy' | 'Unhealthy';
 
 // Backend-prefixed aliases make the wire contract names available to callers
@@ -290,6 +291,13 @@ export interface ServiceRuntimeSnapshot {
 
 export type ServiceRuntimeDto = ServiceRuntimeSnapshot;
 
+export type ServiceRuntimeActionOutcome = 'resumed' | 'ignored' | 'restarted';
+
+export interface ServiceRuntimeActionResult {
+  outcome: ServiceRuntimeActionOutcome;
+}
+
+
 export interface ListenerState {
   enabled: boolean;
   running: boolean;
@@ -302,9 +310,33 @@ export interface ControllerListenersState {
   unixSocket: ListenerState;
 }
 
+export type ControllerHostSnapshotState = 'unknown' | 'accepted' | 'rejected';
+export type ControllerHostReadiness = 'unknown' | 'unready' | 'ready' | 'degraded';
+
+export interface ControllerHostInfo {
+  nodeId: string | null;
+  readOnly: boolean;
+  extensionsSkipped: boolean;
+  supervisorDisabled: boolean;
+  databaseAvailable: boolean;
+  snapshotAvailable: boolean;
+  configurationValid: boolean;
+  publishedConfigurationVersion: number | null;
+  lastSnapshotState: ControllerHostSnapshotState;
+  lastSnapshotStateAt: string | null;
+  readiness: ControllerHostReadiness;
+}
+
+export interface ControllerWebUiState {
+  embedded: boolean;
+  enabled: boolean;
+}
+
 export interface ControllerState {
   bootstrapMode: boolean;
   listeners: ControllerListenersState;
+  host: ControllerHostInfo | null;
+  webUi: ControllerWebUiState;
 }
 
 export interface ExtensionRecord {
@@ -316,6 +348,7 @@ export interface ExtensionRecord {
   recordVersion: number;
   isRunning: boolean;
   manifestVersion: string | null;
+  contentHash: string | null;
 }
 
 export interface ExtensionRefreshSummary {

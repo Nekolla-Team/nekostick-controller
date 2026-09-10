@@ -118,15 +118,25 @@ export function joinHostRoute(baseUrl: string, logicalPath: string): string {
   return parsedBase.toString();
 }
 
+/** Derive the controller API base from the page's transport root. */
+export function defaultControllerBaseUrl(): string | null {
+  if (typeof window === 'undefined' || window.location.origin === '') return null
+  if (window.location.pathname === '/') return window.location.origin
+  const pathname = window.location.pathname.replace(/\/+$/, '')
+  return `${window.location.origin}${pathname}`
+}
+
+
 function configuredBaseUrl(): string | null {
-  const configured = connection.baseUrl?.trim();
+  const configured = connection.baseUrl?.trim()
   if (configured) {
-    return configured;
+    return configured
   }
-  if (typeof window !== 'undefined' && window.location.origin !== '') {
-    return window.location.origin;
-  }
-  return null;
+  return defaultControllerBaseUrl() ?? (
+    typeof window !== 'undefined' && window.location.origin !== ''
+      ? window.location.origin
+      : null
+  )
 }
 
 function serializeBody(body: unknown): string | undefined {

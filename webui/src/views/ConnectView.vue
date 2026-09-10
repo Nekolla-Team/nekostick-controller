@@ -11,7 +11,7 @@ import {
   NInput,
   NSpace,
 } from 'naive-ui'
-import { ApiClientError } from '../api/client'
+import { ApiClientError, defaultControllerBaseUrl } from '../api/client'
 import { getRoot } from '../api/resources/root'
 import { connection, saveConnection, stageConnection } from '../stores/connection'
 import { t } from '../i18n'
@@ -23,8 +23,9 @@ const apiKey = ref(connection.apiKey ?? '')
 const submitting = ref(false)
 const errorMessage = ref<string | null>(null)
 const locationOrigin = typeof window === 'undefined' ? '' : window.location.origin
+const defaultBaseUrl = defaultControllerBaseUrl() ?? locationOrigin
 const baseUrlPlaceholder = computed(() =>
-  baseUrl.value.trim() ? '' : locationOrigin,
+  baseUrl.value.trim() ? '' : defaultBaseUrl,
 )
 
 async function handleSubmit(): Promise<void> {

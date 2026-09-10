@@ -4,10 +4,11 @@ import type {
   ServiceEnvironment,
   ServiceEnvironmentWriteBody,
   ServicePatchBody,
+  ServiceRuntimeActionResult,
   ServiceRuntimeSnapshot,
 } from '../types';
 import { request } from '../client';
-import { readResource, writeResource, deleteResource, requireData } from './helpers';
+import { readResource, writeResource, deleteResource, requireData, actionResourceData } from './helpers';
 
 export const servicesPath = '/v1/services';
 export const runtimePath = '/v1/services/runtime';
@@ -68,6 +69,13 @@ export function deleteEnvironment(id: string, ifMatch: string): Promise<void> {
 export async function getRuntime(id: string): Promise<ServiceRuntimeSnapshot> {
   const response = await request<ServiceRuntimeSnapshot>('GET', serviceRuntimePath(id));
   return requireData(response);
+}
+export function resumeServiceRuntime(id: string): Promise<ServiceRuntimeActionResult> {
+  return actionResourceData<ServiceRuntimeActionResult>(`${serviceRuntimePath(id)}/resume`);
+}
+
+export function restartServiceRuntime(id: string): Promise<ServiceRuntimeActionResult> {
+  return actionResourceData<ServiceRuntimeActionResult>(`${serviceRuntimePath(id)}/restart`);
 }
 
 export async function getAllRuntime(): Promise<ServiceRuntimeSnapshot[]> {

@@ -4,6 +4,7 @@ export const extensions = {
   columns: {
     extensionId: '扩展 ID',
     version: '版本',
+    contentHash: '内容哈希',
     loadState: '加载状态',
     running: '运行中',
     manifestDrift: '磁盘版本 {version}',

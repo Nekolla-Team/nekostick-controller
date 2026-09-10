@@ -1,14 +1,30 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useQuery } from '@tanstack/vue-query'
-import { NCard, NDescriptions, NDescriptionsItem, NSpin, NSpace, NTag } from 'naive-ui'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
+import {
+  NButton,
+  NCard,
+  NDescriptions,
+  NDescriptionsItem,
+  NPopconfirm,
+  NSpin,
+  NSpace,
+  NTag,
+  useMessage,
+} from 'naive-ui'
 import ApiErrorAlert from '../components/ApiErrorAlert.vue'
-import { getRuntime } from '../api/resources/services'
+import {
+  getRuntime,
+  restartServiceRuntime,
+  resumeServiceRuntime,
+} from '../api/resources/services'
 import type { ServiceHealthState, ServiceLifecycleState } from '../api/types'
 import { useRoute } from 'vue-router'
 import { t } from '../i18n'
 
 const route = useRoute()
+const queryClient = useQueryClient()
+const message = useMessage()
 const serviceId = computed(() => String(route.params.id ?? ''))
 const runtimeQuery = useQuery({
   queryKey: computed(() => ['services', serviceId.value, 'runtime']),
@@ -19,11 +35,35 @@ const runtimeQuery = useQuery({
 })
 const snapshot = computed(() => runtimeQuery.data.value)
 
+const runtimeMutation = useMutation({
+  mutationFn: ({ id, action }: { id: string; action: 'resume' | 'restart' }) =>
+    action === 'resume' ? resumeServiceRuntime(id) : restartServiceRuntime(id),
+  onSuccess: async (result, variables) => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['services', variables.id, 'runtime'] }),
+      queryClient.invalidateQueries({ queryKey: ['services'] }),
+    ])
+    if (variables.action === 'resume' && result.outcome === 'ignored') {
+      message.info(t('serviceRuntime.feedback.resumeIgnored'))
+    } else {
+      message.success(t(
+        variables.action === 'restart'
+          ? 'serviceRuntime.feedback.restartSuccess'
+          : 'serviceRuntime.feedback.resumeSuccess',
+      ))
+    }
+  },
+})
+
 function lifecycleType(state: ServiceLifecycleState): 'default' | 'success' | 'warning' | 'error' {
   if (state === 'Running') return 'success'
-  if (state === 'Starting' || state === 'Stopping') return 'warning'
+  if (state === 'Starting' || state === 'Stopping' || state === 'waiting') return 'warning'
   if (state === 'Failed') return 'error'
   return 'default'
+}
+
+function lifecycleLabel(state: ServiceLifecycleState): string {
+  return state === 'waiting' ? t('serviceRuntime.status.waiting') : state
 }
 
 function healthType(state: ServiceHealthState): 'default' | 'success' | 'warning' | 'error' {
@@ -56,6 +96,7 @@ function formatDate(value: string | null): string {
 }
 </script>
 
+
 <template>
   <main class="page-stack">
     <header class="page-heading">
@@ -63,13 +104,36 @@ function formatDate(value: string | null): string {
         <h1>{{ t('serviceRuntime.title') }}</h1>
         <p class="service-id">{{ serviceId }}</p>
       </div>
+      <n-space v-if="serviceId" align="center">
+        <n-popconfirm
+          :positive-text="t('common.confirm')"
+          :negative-text="t('common.cancel')"
+          @positive-click="runtimeMutation.mutate({ id: serviceId, action: 'restart' })"
+        >
+          <template #trigger>
+            <n-button :loading="runtimeMutation.isPending.value" :disabled="runtimeMutation.isPending.value">
+              {{ t('serviceRuntime.actions.restart') }}
+            </n-button>
+          </template>
+          {{ t('serviceRuntime.confirm.restart') }}
+        </n-popconfirm>
+        <n-button
+          type="primary"
+          :loading="runtimeMutation.isPending.value"
+          :disabled="runtimeMutation.isPending.value"
+          @click="runtimeMutation.mutate({ id: serviceId, action: 'resume' })"
+        >
+          {{ t('serviceRuntime.actions.resume') }}
+        </n-button>
+      </n-space>
     </header>
     <ApiErrorAlert v-if="runtimeQuery.isError.value" :error="runtimeQuery.error.value" />
+    <ApiErrorAlert v-if="runtimeMutation.isError.value" :error="runtimeMutation.error.value" />
     <n-spin :show="runtimeQuery.isLoading.value">
       <n-card v-if="snapshot" :title="t('serviceRuntime.snapshotTitle')">
         <n-space wrap>
           <n-tag :type="lifecycleType(snapshot.lifecycleState)">
-            {{ t('serviceRuntime.status.lifecycle', { state: snapshot.lifecycleState }) }}
+            {{ t('serviceRuntime.status.lifecycle', { state: lifecycleLabel(snapshot.lifecycleState) }) }}
           </n-tag>
           <n-tag :type="healthType(snapshot.healthState)">
             {{ t('serviceRuntime.status.health', { state: snapshot.healthState }) }}

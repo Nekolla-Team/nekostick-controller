@@ -3,7 +3,20 @@ export const serviceRuntime = {
   snapshotTitle: '运行时快照',
   status: {
     lifecycle: '生命周期：{state}',
+    waiting: '等待中',
     health: '健康：{state}',
+  },
+  actions: {
+    restart: '重启',
+    resume: '恢复运行',
+  },
+  confirm: {
+    restart: '确定重启此服务？',
+  },
+  feedback: {
+    restartSuccess: '服务已重启',
+    resumeSuccess: '服务已恢复运行',
+    resumeIgnored: '服务当前不在等待状态，已忽略恢复操作',
   },
   uptime: {
     days: '{days} 天',

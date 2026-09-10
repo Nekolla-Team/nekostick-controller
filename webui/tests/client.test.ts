@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiClientError, joinHostRoute, request } from '../src/api/client';
+import { ApiClientError, defaultControllerBaseUrl, joinHostRoute, request } from '../src/api/client';
 import { connection, saveConnection } from '../src/stores/connection';
 
 function envelope<T>(data: T, version: number | null = 1): string {
@@ -154,6 +154,41 @@ describe('controller API client', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('embedded Web UI auto-base URL', () => {
+  it.each([
+    ['/', window.location.origin],
+    ['/controller/', `${window.location.origin}/controller`],
+    ['/admin/v1/ui/', `${window.location.origin}/admin/v1/ui`],
+  ])('derives the base for page path %s', (path, expected) => {
+    const originalPath = `${window.location.pathname}${window.location.search}${window.location.hash}`
+    window.history.replaceState({}, '', path)
+    saveConnection(null, 'test-key')
+    try {
+      expect(defaultControllerBaseUrl()).toBe(expected)
+    } finally {
+      window.history.replaceState({}, '', originalPath || '/')
+    }
+  })
+
+  it('keeps a manually configured base URL ahead of page auto-detection', async () => {
+    const originalPath = `${window.location.pathname}${window.location.search}${window.location.hash}`
+    window.history.replaceState({}, '', '/controller/')
+    saveConnection('http://manual.example/controller', 'test-key')
+    const fetchMock = vi.fn().mockResolvedValue(new Response(envelope({ ready: true }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      await expect(request('GET', '/v1')).resolves.toMatchObject({ status: 200 })
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://manual.example/controller/v1',
+        expect.objectContaining({ method: 'GET' }),
+      )
+    } finally {
+      saveConnection(null, 'test-key')
+      window.history.replaceState({}, '', originalPath || '/')
+    }
+  })
+})
 
 describe('HostRoute URL joining', () => {
   it.each([
