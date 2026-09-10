@@ -92,7 +92,7 @@ Web UI 在各传输的 controller root 提供内嵌的单文件 SPA 外壳：
 
 页面响应的 `Content-Type` 为 `text/html`，不需要 `x-nekostick-controller-key`。仅接受 `GET`；其他 method 会继续进入普通管理 API admission。页面路径不添加 CORS response headers。
 
-Web UI 由 controller extension settings 中的 `enableWebUi` 控制，默认值为 `false`：
+Web UI 由 controller extension settings 中的 `enableWebUi` 控制。该设置在缺省（无设置文档或字段缺失）时默认为 `true`，即安装内嵌 flavor 后无需任何配置即可使用；显式设置为 `false` 可关闭页面：
 
 ```json
 {

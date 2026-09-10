@@ -134,8 +134,8 @@ public sealed class ControllerOptions
     /// <remarks>Setting this to <see langword="false" /> is rejected; remote binding is out of scope.</remarks>
     public bool LoopbackOnly { get; init; } = true;
 
-    /// <summary>Gets whether the embedded single-file Web UI is served by supported transports.</summary>
-    public bool EnableWebUi { get; init; }
+    /// <summary>Gets whether the embedded single-file Web UI is served by supported transports. Defaults to <see langword="true" />.</summary>
+    public bool EnableWebUi { get; init; } = true;
 
     /// <summary>Gets whether the Host-owned route adapter is enabled.</summary>
     public bool EnableHostRoute { get; init; }
@@ -408,7 +408,7 @@ public sealed class ControllerOptions
         public bool LoopbackOnly { get; init; } = true;
 
         [JsonPropertyName("enableWebUi")]
-        public bool EnableWebUi { get; init; }
+        public bool EnableWebUi { get; init; } = true;
 
         [JsonPropertyName("enableHostRoute")]
         public bool EnableHostRoute { get; init; }

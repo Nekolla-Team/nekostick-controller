@@ -20,7 +20,7 @@ public sealed class ControllerWebUiCollectionDefinition
 public sealed class ControllerWebUiSettingsTests
 {
     [Fact]
-    public void ControllerOptions_EnableWebUiDefaultsFalseAndRoundTripsTrue()
+    public void ControllerOptions_EnableWebUiDefaultsTrueAndHonorsExplicitFalse()
     {
         var defaultSettings = new ExtensionSettingsConfiguration(
             ControllerOptions.ExtensionId,
@@ -29,16 +29,16 @@ public sealed class ControllerWebUiSettingsTests
             version: 0);
         Assert.True(ControllerOptions.TryParseHostSettings(defaultSettings, out var defaults));
         var parsedDefaults = defaults ?? throw new InvalidOperationException("Default options were not parsed.");
-        Assert.False(parsedDefaults.EnableWebUi);
+        Assert.True(parsedDefaults.EnableWebUi);
 
-        var enabledSettings = new ExtensionSettingsConfiguration(
+        var disabledSettings = new ExtensionSettingsConfiguration(
             ControllerOptions.ExtensionId,
             ControllerOptions.ConfigurationSchemaVersion,
-            "{\"enableWebUi\":true}",
+            "{\"enableWebUi\":false}",
             version: 1);
-        Assert.True(ControllerOptions.TryParseHostSettings(enabledSettings, out var enabled));
-        var parsedEnabled = enabled ?? throw new InvalidOperationException("Enabled options were not parsed.");
-        Assert.True(parsedEnabled.EnableWebUi);
+        Assert.True(ControllerOptions.TryParseHostSettings(disabledSettings, out var disabled));
+        var parsedDisabled = disabled ?? throw new InvalidOperationException("Disabled options were not parsed.");
+        Assert.False(parsedDisabled.EnableWebUi);
     }
 }
 
