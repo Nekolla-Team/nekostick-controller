@@ -46,6 +46,29 @@ internal sealed partial class ControllerManagementCore
         return ControllerManagementResponseBuilder.SuccessUnversioned(mapped);
     }
 
+    private static async ValueTask<ControllerManagementResponse> InstallExtensionAsync(Stream body, CancellationToken cancellationToken)
+    {
+        var result = await ControllerExtensionInstaller.InstallAsync(body, cancellationToken).ConfigureAwait(false);
+        if (result.Outcome != ControllerExtensionInstallOutcome.Installed)
+        {
+            return result.Outcome switch
+            {
+                ControllerExtensionInstallOutcome.InvalidPackage => ControllerManagementResponseBuilder.InvalidRequest,
+                ControllerExtensionInstallOutcome.DowngradeForbidden => ControllerManagementResponseBuilder.DowngradeForbidden,
+                _ => result.RestoreSucceeded is { } restored
+                    ? ControllerManagementResponseBuilder.StorageUnavailableWithRestore(restored)
+                    : ControllerManagementResponseBuilder.StorageUnavailable
+            };
+        }
+
+        return ControllerManagementResponseBuilder.SuccessUnversioned(new ControllerExtensionInstallResultDto
+        {
+            Id = result.Id ?? string.Empty,
+            Version = result.Version ?? string.Empty,
+            Replaced = result.Replaced
+        });
+    }
+
     private async ValueTask<ControllerManagementResponse> WriteExtensionLifecycleAsync(ControllerManagementRequest request, string method, string extensionId, string action, CancellationToken cancellationToken)
     {
         var expectedMethod = action == "record" ? "DELETE" : "POST";

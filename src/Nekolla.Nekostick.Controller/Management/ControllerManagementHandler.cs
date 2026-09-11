@@ -44,7 +44,7 @@ public sealed class ControllerManagementHandler : IExtensionHandler
 
         // Browser preflight is answered before admission so cross-origin probes never need an
         // API key; every later response carries the CORS headers so browsers can read errors too.
-        var corsOrigin = MatchAllowedOrigin(request.Headers);
+        var corsOrigin = MatchAllowedOrigin(_options, request.Headers);
         if (corsOrigin is not null &&
             string.Equals(request.Method, "OPTIONS", StringComparison.OrdinalIgnoreCase) &&
             request.Headers.ContainsKey(CorsRequestMethodHeaderName))
@@ -61,22 +61,33 @@ public sealed class ControllerManagementHandler : IExtensionHandler
     }
 
     /// <summary>Returns the Origin header value when it is allowed, or the wildcard marker.</summary>
-    private string? MatchAllowedOrigin(IReadOnlyDictionary<string, ImmutableArray<string>> headers)
+    internal static string? MatchAllowedOrigin(ControllerOptions options, IReadOnlyDictionary<string, ImmutableArray<string>> headers)
     {
-        if (_options.CorsAllowedOrigins.IsEmpty ||
+        if (options.CorsAllowedOrigins.IsEmpty ||
             !headers.TryGetValue(OriginHeaderName, out var origins) ||
             origins.Length != 1)
         {
             return null;
         }
 
-        if (_options.CorsAllowedOrigins.Contains("*", StringComparer.Ordinal))
+        if (options.CorsAllowedOrigins.Contains("*", StringComparer.Ordinal))
         {
             return "*";
         }
 
         var origin = origins[0];
-        return _options.CorsAllowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase) ? origin : null;
+        return options.CorsAllowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase) ? origin : null;
+    }
+
+    /// <summary>Appends the CORS actual-response headers for an allowed origin.</summary>
+    internal static void AppendCorsHeaders(List<KeyValuePair<string, IEnumerable<string>>> headers, string corsOrigin)
+    {
+        headers.Add(new KeyValuePair<string, IEnumerable<string>>(CorsAllowOriginHeaderName, new[] { corsOrigin }));
+        headers.Add(new KeyValuePair<string, IEnumerable<string>>(CorsExposeHeadersHeaderName, new[] { CorsExposedHeaders }));
+        if (!string.Equals(corsOrigin, "*", StringComparison.Ordinal))
+        {
+            headers.Add(new KeyValuePair<string, IEnumerable<string>>(VaryHeaderName, new[] { OriginHeaderName }));
+        }
     }
 
     private static ExtensionHandlerResponse CorsPreflightResponse(string allowedOrigin)
@@ -94,18 +105,15 @@ public sealed class ControllerManagementHandler : IExtensionHandler
 
         return new ExtensionHandlerResponse(204, headers, ReadOnlyMemory<byte>.Empty);
     }
-    private static string? ReadApiKey(IReadOnlyDictionary<string, ImmutableArray<string>> headers) => headers.TryGetValue(ControllerManagementApiContract.ApiKeyHeaderName, out var values) && values.Length == 1 && !string.IsNullOrEmpty(values[0]) ? values[0] : null;
+    /// <summary>Reads the single presented API key value, when exactly one non-empty value exists.</summary>
+    internal static string? ReadApiKey(IReadOnlyDictionary<string, ImmutableArray<string>> headers) => headers.TryGetValue(ControllerManagementApiContract.ApiKeyHeaderName, out var values) && values.Length == 1 && !string.IsNullOrEmpty(values[0]) ? values[0] : null;
+
     private static ExtensionHandlerResponse ToExtensionResponse(ControllerManagementResponse response, string? corsOrigin)
     {
         var headers = response.Headers.Select(static pair => new KeyValuePair<string, IEnumerable<string>>(pair.Key, pair.Value)).ToList();
         if (corsOrigin is not null)
         {
-            headers.Add(new KeyValuePair<string, IEnumerable<string>>(CorsAllowOriginHeaderName, new[] { corsOrigin }));
-            headers.Add(new KeyValuePair<string, IEnumerable<string>>(CorsExposeHeadersHeaderName, new[] { CorsExposedHeaders }));
-            if (!string.Equals(corsOrigin, "*", StringComparison.Ordinal))
-            {
-                headers.Add(new KeyValuePair<string, IEnumerable<string>>(VaryHeaderName, new[] { OriginHeaderName }));
-            }
+            AppendCorsHeaders(headers, corsOrigin);
         }
 
         return new ExtensionHandlerResponse(response.StatusCode, headers, ControllerManagementJson.AsReadOnlyMemory(response.Body));

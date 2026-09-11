@@ -125,19 +125,9 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
             }
 
             var configuration = Volatile.Read(ref _configuration);
-            var options = configuration.Options;
-            if (!options.IsTransportEnabled(request.Transport))
+            if (Admit(request, configuration.Options) is { } rejection)
             {
-                return ControllerManagementResponseBuilder.TransportDisabled;
-            }
-
-            if (!options.IsApiKeyValid(request.ApiKey) ||
-                !request.Headers.TryGetValue(ControllerManagementApiContract.ApiKeyHeaderName, out var keyValues) ||
-                keyValues.Length != 1 ||
-                !options.IsApiKeyValid(keyValues[0]) ||
-                !string.Equals(request.ApiKey, keyValues[0], StringComparison.Ordinal))
-            {
-                return ControllerManagementResponseBuilder.Unauthorized;
+                return rejection;
             }
 
             return await configuration.Core.DispatchAsync(request, cancellationToken).ConfigureAwait(false);
@@ -147,6 +137,57 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
             EndDispatch();
         }
     }
+
+    /// <inheritdoc />
+    public async ValueTask<ControllerManagementResponse> DispatchStreamingAsync(
+        ControllerManagementRequest request,
+        Stream body,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(body);
+        Interlocked.Increment(ref _inFlight);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsStarted)
+            {
+                return ControllerManagementResponseBuilder.Unavailable;
+            }
+
+            var configuration = Volatile.Read(ref _configuration);
+            if (Admit(request, configuration.Options) is { } rejection)
+            {
+                return rejection;
+            }
+
+            return await configuration.Core.DispatchStreamingAsync(request, body, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            EndDispatch();
+        }
+    }
+
+    private static ControllerManagementResponse? Admit(ControllerManagementRequest request, ControllerOptions options)
+    {
+        if (!options.IsTransportEnabled(request.Transport))
+        {
+            return ControllerManagementResponseBuilder.TransportDisabled;
+        }
+
+        if (!options.IsApiKeyValid(request.ApiKey) ||
+            !request.Headers.TryGetValue(ControllerManagementApiContract.ApiKeyHeaderName, out var keyValues) ||
+            keyValues.Length != 1 ||
+            !options.IsApiKeyValid(keyValues[0]) ||
+            !string.Equals(request.ApiKey, keyValues[0], StringComparison.Ordinal))
+        {
+            return ControllerManagementResponseBuilder.Unauthorized;
+        }
+
+        return null;
+    }
+
     private void EndDispatch()
     {
         if (Interlocked.Decrement(ref _inFlight) == 0)

@@ -93,6 +93,66 @@ internal sealed partial class ControllerManagementCore
         }
     }
 
+    /// <summary>
+    /// Dispatches one streaming management request whose body is a live transport stream. Only the
+    /// extension install endpoint is reachable here; every other path is invalid on this channel.
+    /// </summary>
+    internal async ValueTask<ControllerManagementResponse> DispatchStreamingAsync(
+        ControllerManagementRequest request,
+        Stream body,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(body);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_bridge is null) return ControllerManagementResponseBuilder.Unavailable;
+        if (!HasFullConfigurationScope() || !ExtensionHostApiSupport.IsApi13Supported(_bridge.ApiVersion)) return ControllerManagementResponseBuilder.Unsupported;
+
+        var method = request.Method.Trim().ToUpperInvariant();
+        var path = NormalizePath(request.Path, request.Transport);
+        if (path is null || method.Length == 0) return ControllerManagementResponseBuilder.InvalidRequest;
+        if (path != ControllerManagementApiContract.ExtensionsInstallPath) return ControllerManagementResponseBuilder.InvalidRequest;
+        if (!string.Equals(method, "POST", StringComparison.Ordinal)) return ControllerManagementResponseBuilder.MethodNotAllowed;
+
+        try
+        {
+            if (_mutationGate is not null)
+            {
+                await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            try
+            {
+                if (_admissionProbe is not null && !_admissionProbe())
+                {
+                    return ControllerManagementResponseBuilder.Unavailable;
+                }
+
+                return await InstallExtensionAsync(body, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _mutationGate?.Release();
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (ArgumentException)
+        {
+            return ControllerManagementResponseBuilder.InvalidRequest;
+        }
+        catch (NotSupportedException)
+        {
+            return ControllerManagementResponseBuilder.Unsupported;
+        }
+        catch
+        {
+            return ControllerManagementResponseBuilder.Unavailable;
+        }
+    }
+
     private async ValueTask<ControllerManagementResponse> RouteAsync(
         string path,
         string method,
@@ -171,6 +231,8 @@ internal sealed partial class ControllerManagementCore
             };
         if (path == ControllerManagementApiContract.ExtensionsRefreshPath)
             return method == "POST" ? await RefreshExtensionsAsync(request, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
+        if (path == ControllerManagementApiContract.ExtensionsInstallPath)
+            return method == "POST" ? ControllerManagementResponseBuilder.Unsupported : ControllerManagementResponseBuilder.MethodNotAllowed;
 
         if (TryGetExtensionActionPath(path, out var actionExtensionId, out var extensionAction))
             return await WriteExtensionLifecycleAsync(request, method, actionExtensionId, extensionAction, cancellationToken).ConfigureAwait(false);

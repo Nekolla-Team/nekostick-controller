@@ -6,6 +6,7 @@ using System.Net;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
@@ -371,6 +372,16 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
             }
         }
 
+            // The extension install endpoint carries a package larger than the shared 1 MiB
+            // buffered ceiling, so it is dispatched directly on the request stream before the
+            // buffered-content-length gate applies.
+            if (string.Equals(context.Request.Method, "POST", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(requestPath, ControllerManagementApiContract.ExtensionsInstallPath, StringComparison.Ordinal))
+            {
+                await HandleInstallAsync(context, dispatcher, requestPath, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
         if (context.Request.ContentLength is > ControllerAdmissionLimits.MaximumRequestBodyBytes)
         {
             await WriteResponseAsync(context, ControllerManagementResponse.InvalidRequest, cancellationToken)
@@ -445,6 +456,51 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
         {
             ArrayPool<byte>.Shared.Return(rentedBody, clearArray: true);
         }
+    }
+
+    private async Task HandleInstallAsync(
+        HttpContext context,
+        IControllerManagementDispatcher dispatcher,
+        string requestPath,
+        CancellationToken cancellationToken)
+    {
+        if (!TryCopyHeaders(context.Request.Headers, out var headers, out var apiKey) ||
+            !ControllerAdmissionLimits.TryCreateRequest(
+                _transport,
+                "POST",
+                requestPath,
+                apiKey,
+                headers!,
+                ReadOnlyMemory<byte>.Empty,
+                out var request) ||
+            request is null)
+        {
+            await WriteResponseAsync(context, ControllerManagementResponse.InvalidRequest, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        // Package bounds are enforced by the installer's bounded copy, which turns oversized
+        // uploads into a 400 instead of a transport-level abort.
+        if (context.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } bodySizeFeature)
+        {
+            bodySizeFeature.MaxRequestBodySize = null;
+        }
+
+        ControllerManagementResponse response;
+        try
+        {
+            response = await dispatcher.DispatchStreamingAsync(request, context.Request.Body, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch
+        {
+            response = ControllerManagementResponse.Unavailable;
+        }
+
+        await WriteResponseAsync(context, response, cancellationToken).ConfigureAwait(false);
     }
 
     private static async ValueTask WriteWebUiResponseAsync(

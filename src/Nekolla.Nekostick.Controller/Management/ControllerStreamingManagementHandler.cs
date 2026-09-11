@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Immutable;
 using System.Globalization;
 using Microsoft.AspNetCore.Http;
 using Nekolla.Nekostick.Contracts;
@@ -52,6 +53,13 @@ internal sealed class ControllerStreamingManagementHandler : IExtensionStreaming
             }
         }
 
+        if (string.Equals(request.Method, "POST", StringComparison.OrdinalIgnoreCase) &&
+            currentOptions.HostRoutePath is { } installPrefix &&
+            string.Equals(request.Path, installPrefix + ControllerManagementApiContract.ExtensionsInstallPath, StringComparison.Ordinal))
+        {
+            return await HandleInstallAsync(request, currentOptions, cancellationToken).ConfigureAwait(false);
+        }
+
         var rentedBody = ArrayPool<byte>.Shared.Rent(ControllerAdmissionLimits.MaximumRequestBodyBytes + 1);
         try
         {
@@ -67,6 +75,7 @@ internal sealed class ControllerStreamingManagementHandler : IExtensionStreaming
                 request.Headers.Select(static pair => new KeyValuePair<string, IEnumerable<string>>(pair.Key, pair.Value)),
                 rentedBody.AsMemory(0, bodyLength),
                 request.IsHttps);
+
             var response = await _bufferedHandler.HandleAsync(bufferedRequest, cancellationToken).ConfigureAwait(false);
             return ToStreamingResponse(response);
         }
@@ -74,6 +83,49 @@ internal sealed class ControllerStreamingManagementHandler : IExtensionStreaming
         {
             ArrayPool<byte>.Shared.Return(rentedBody, clearArray: true);
         }
+    }
+
+    private async ValueTask<ExtensionStreamingResponse> HandleInstallAsync(
+        ExtensionStreamingRequest request,
+        ControllerOptions currentOptions,
+        CancellationToken cancellationToken)
+    {
+        var headerDictionary = request.Headers
+            .GroupBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.SelectMany(static pair => pair.Value).ToImmutableArray(),
+                StringComparer.OrdinalIgnoreCase);
+        var corsOrigin = ControllerManagementHandler.MatchAllowedOrigin(currentOptions, headerDictionary);
+        var presentedKey = ControllerManagementHandler.ReadApiKey(headerDictionary);
+        if (!ControllerAdmissionLimits.TryCreateRequest(
+                ControllerTransport.HostRoute,
+                request.Method,
+                request.Path,
+                presentedKey,
+                request.Headers.Select(static pair => new KeyValuePair<string, IEnumerable<string>>(pair.Key, pair.Value)),
+                ReadOnlyMemory<byte>.Empty,
+                out var installRequest) ||
+            installRequest is null)
+        {
+            return ToStreamingResponse(ControllerManagementResponse.InvalidRequest, corsOrigin);
+        }
+
+        ControllerManagementResponse response;
+        try
+        {
+            response = await _dispatcher.DispatchStreamingAsync(installRequest, request.BodyStream, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            response = ControllerManagementResponse.Unavailable;
+        }
+
+        return ToStreamingResponse(response, corsOrigin);
     }
 
     private static async ValueTask<int> ReadBodyAsync(
@@ -114,6 +166,20 @@ internal sealed class ControllerStreamingManagementHandler : IExtensionStreaming
             resource.Dispose();
             throw;
         }
+    }
+
+    /// <summary>Converts a management response for the install branch, appending CORS headers.</summary>
+    private static ExtensionStreamingResponse ToStreamingResponse(ControllerManagementResponse response, string? corsOrigin)
+    {
+        if (corsOrigin is null)
+        {
+            return ToStreamingResponse(response);
+        }
+
+        var headers = response.Headers.Select(static pair => new KeyValuePair<string, IEnumerable<string>>(pair.Key, pair.Value)).ToList();
+        ControllerManagementHandler.AppendCorsHeaders(headers, corsOrigin);
+        var body = new MemoryStream(response.Body.ToArray(), writable: false);
+        return new ExtensionStreamingResponse(response.StatusCode, headers, body);
     }
 
     private static ExtensionStreamingResponse ToStreamingResponse(ExtensionHandlerResponse response)

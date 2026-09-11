@@ -49,6 +49,17 @@ public sealed class ControllerExtensionScanSkipDto
     [JsonPropertyName("failureCode")] public string FailureCode { get; init; } = string.Empty;
 }
 
+/// <summary>Read representation of one extension package install result.</summary>
+public sealed class ControllerExtensionInstallResultDto
+{
+    /// <summary>Manifest identifier of the installed extension.</summary>
+    [JsonPropertyName("id")] public string Id { get; init; } = string.Empty;
+    /// <summary>Manifest version of the installed extension.</summary>
+    [JsonPropertyName("version")] public string Version { get; init; } = string.Empty;
+    /// <summary>Whether an existing extension directory was fully replaced.</summary>
+    [JsonPropertyName("replaced")] public bool Replaced { get; init; }
+}
+
 /// <summary>Read representation of extension settings.</summary>
 public sealed class ControllerExtensionSettingsReadDto
 {

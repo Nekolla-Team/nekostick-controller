@@ -27,6 +27,7 @@
 | `GET` | `/v1/extensions/{id}` | 读取 extension record |
 | `GET`, `PUT`, `DELETE` | `/v1/extensions/{id}/settings` | 读取、替换或删除 extension settings |
 | `POST` | `/v1/extensions/refresh` | 重新扫描扩展目录并返回摘要（含 `skipped`，Host API >=1.3.4） |
+| `POST` | `/v1/extensions/install` | 流式上传扩展 zip 包并安装/整体替换扩展目录（HostRoute 需 Host API >=1.3.2） |
 
 route/service `{id}` 是 GUID；extension `{id}` 是不含 `/` 的非空字符串。已识别资源上的其他 method 返回 `405 method_not_allowed`，未知路径返回 `404 not_found`。
 
@@ -126,7 +127,7 @@ key 必须恰好出现一次，长度 `32..4096`，不能包含空白。HTTP、U
 | aggregate headers | UTF-8 总数最多 64 KiB |
 | gRPC 外层消息 | `1 MiB + 64 KiB + 32 KiB` |
 
-带 body 的写入要求恰好一个 `Content-Type`。普通写入使用 `application/json`；PATCH 也可以使用 `application/merge-patch+json`。JSON 使用 camelCase、字符串 enum、最大深度 32，不允许未知字段、注释或尾逗号。
+带 body 的写入要求恰好一个 `Content-Type`。普通写入使用 `application/json`；PATCH 也可以使用 `application/merge-patch+json`。JSON 使用 camelCase、字符串 enum、最大深度 32，不允许未知字段、注释或尾逗号。`POST /v1/extensions/install` 是唯一例外：body 为 zip 字节流，上限 64 MiB，不经过上表的 1 MiB 限制。
 
 ## 4. 响应 envelope
 
@@ -178,6 +179,7 @@ key 必须恰好出现一次，长度 `32..4096`，不能包含空白。HTTP、U
 | 404 | `not_found` | 资源不存在 |
 | 405 | `method_not_allowed` | 已识别资源不支持该 method |
 | 409 | `reserved_route` | 操作触及控制器保留 route |
+| 409 | `downgrade_forbidden` | 扩展安装包版本低于已安装版本 |
 | 412 | `precondition_failed` | `If-Match` 已过期 |
 | 428 | `precondition_required` | mutation 缺少 `If-Match` |
 | 501 | `unsupported` | Host API、能力或操作不支持 |
@@ -418,6 +420,20 @@ extension record 是只读信息：
   ]
 }
 ```
+
+`POST /v1/extensions/install` 上传扩展安装包。与其他管理端点不同，请求 body 是 zip 原始字节流（不是 JSON、不是 multipart），建议带 `Content-Type: application/zip`；安装包上限 64 MiB，解压总量上限 256 MiB，超限返回 `400 invalid_request`。zip 根目录必须有 `manifest.json`，至少包含合法的 `id` 与 semver `version` 字段。
+
+安装目标目录是扩展根目录下的 `<id>/`，完全替换不做合并：目录已存在时先整体改名为 `<id>.bak` 备份，新目录就位后再删除备份；若备份就位后的替换步骤失败，会尝试从备份恢复原目录，此时 `503 storage_unavailable` 的 `message` 会明确说明恢复是否成功（未触及原目录的失败响应不包含恢复信息）。已安装版本高于上传版本时拒绝降级，返回 `409 downgrade_forbidden` 且不改动磁盘。版本相等允许替换；已有目录的 manifest 无法解析时视为可替换。安装成功后需要调用方自行触发 `POST /v1/extensions/refresh`（或等待 Host 自行扫描）让新扩展生效。成功响应是无版本 envelope：
+
+```json
+{
+  "id": "nekolla.nekostick.example",
+  "version": "1.4.2",
+  "replaced": false
+}
+```
+
+该端点只接受流式传输：HTTP/JSON 与 Unix socket 直接可用；HostRoute 需要 Host API >=1.3.2 的 streaming handler（旧 Host 的 buffered 路由返回 `501 unsupported`），且 body 上限受 Host 全局 `maxRequestBodyBytes` 约束。gRPC 不支持。其余错误：`400 invalid_request`（zip 损坏、缺少/非法 manifest、超限）、`503 storage_unavailable`（扩展目录不可写）。
 
 `skipped` 逐项报告本次扫描中被跳过的目录：`directoryName` 是目录叶子名（不含完整路径），`failureCode` 是稳定的失败类别名（如 `ManifestMissing`、`JsonInvalid`）。Host API 低于 `1.3.4` 时 `skipped` 为 `null`；更早版本（低于 `1.3.1`）不提供该端点，返回 `501 unsupported`。
 

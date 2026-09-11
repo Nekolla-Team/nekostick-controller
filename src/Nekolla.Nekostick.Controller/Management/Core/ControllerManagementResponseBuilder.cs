@@ -44,9 +44,11 @@ internal static class ControllerManagementResponseBuilder
     internal static ControllerManagementResponse PreconditionRequired => Error(428, ControllerDispatchCode.InvalidRequest, "precondition_required", "Exactly one If-Match precondition is required.");
     internal static ControllerManagementResponse PreconditionFailed => Error(412, ControllerDispatchCode.Conflict, "precondition_failed", "The supplied If-Match precondition is stale.");
     internal static ControllerManagementResponse ReservedRoute => Error(409, ControllerDispatchCode.Conflict, "reserved_route", "The controller management route is reserved.");
+    internal static ControllerManagementResponse DowngradeForbidden => Error(409, ControllerDispatchCode.Conflict, "downgrade_forbidden", "The installed extension version is newer than the uploaded package.");
     internal static ControllerManagementResponse Unsupported => Error(501, ControllerDispatchCode.Unsupported, "unsupported", "The management operation is unsupported.");
     internal static ControllerManagementResponse MethodNotAllowed => Error(405, ControllerDispatchCode.InvalidRequest, "method_not_allowed", "The management method is not supported.");
     internal static ControllerManagementResponse Unavailable => Error(503, ControllerDispatchCode.Unavailable, "unavailable", "The controller management service is unavailable.");
     internal static ControllerManagementResponse StorageUnavailable => Error(503, ControllerDispatchCode.Unavailable, "storage_unavailable", "The configuration store is unavailable.");
+    internal static ControllerManagementResponse StorageUnavailableWithRestore(bool restored) => Error(503, ControllerDispatchCode.Unavailable, "storage_unavailable", restored ? "The extension install failed; the previous installation was restored." : "The extension install failed; the previous installation could not be restored.");
 }
 

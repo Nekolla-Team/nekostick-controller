@@ -9,6 +9,19 @@ public interface IControllerManagementDispatcher
     ValueTask<ControllerManagementResponse> DispatchAsync(
         ControllerManagementRequest request,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Dispatches a request whose body is a live transport-owned stream. Only streaming-capable
+    /// endpoints (currently the extension package install) are reachable; the stream is read but
+    /// never disposed by the dispatcher.
+    /// </summary>
+    /// <param name="request">The admitted transport-neutral request metadata with an empty body.</param>
+    /// <param name="body">The live request body stream owned by the transport.</param>
+    /// <param name="cancellationToken">Cancels the dispatch.</param>
+    ValueTask<ControllerManagementResponse> DispatchStreamingAsync(
+        ControllerManagementRequest request,
+        Stream body,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>Exposes the atomically active immutable options to transport request handlers.</summary>
