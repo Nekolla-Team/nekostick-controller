@@ -393,9 +393,6 @@ const columns = computed<DataTableColumns<ExtensionRecord>>(() => [
       <n-card class="upload-modal" :title="t('extensions.install.title')" closable @close="closeUploadModal">
         <div class="upload-modal-content">
           <div class="upload-list">
-            <div v-if="uploadEntries.length === 0" class="upload-empty">
-              {{ t('extensions.install.dropHint') }}
-            </div>
             <div v-for="entry in uploadEntries" :key="entry.id" class="upload-entry">
               <div class="upload-entry-heading">
                 <span class="upload-entry-name" :title="entry.name">{{ entry.name }}</span>
@@ -517,11 +514,6 @@ h1 {
   overflow-y: auto;
 }
 
-.upload-empty {
-  color: var(--n-text-color-3);
-  padding: 20px 8px;
-  text-align: center;
-}
 
 .upload-entry {
   border: 1px solid var(--n-border-color);
