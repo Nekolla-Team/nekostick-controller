@@ -45,6 +45,8 @@ internal static class ControllerManagementResponseBuilder
     internal static ControllerManagementResponse PreconditionFailed => Error(412, ControllerDispatchCode.Conflict, "precondition_failed", "The supplied If-Match precondition is stale.");
     internal static ControllerManagementResponse ReservedRoute => Error(409, ControllerDispatchCode.Conflict, "reserved_route", "The controller management route is reserved.");
     internal static ControllerManagementResponse DowngradeForbidden => Error(409, ControllerDispatchCode.Conflict, "downgrade_forbidden", "The installed extension version is newer than the uploaded package.");
+    internal static ControllerManagementResponse InvalidRequestWithReason(string reason) => Error(400, ControllerDispatchCode.InvalidRequest, "invalid_request", reason);
+    internal static ControllerManagementResponse DowngradeForbiddenWithReason(string reason) => Error(409, ControllerDispatchCode.Conflict, "downgrade_forbidden", reason);
     internal static ControllerManagementResponse Unsupported => Error(501, ControllerDispatchCode.Unsupported, "unsupported", "The management operation is unsupported.");
     internal static ControllerManagementResponse MethodNotAllowed => Error(405, ControllerDispatchCode.InvalidRequest, "method_not_allowed", "The management method is not supported.");
     internal static ControllerManagementResponse Unavailable => Error(503, ControllerDispatchCode.Unavailable, "unavailable", "The controller management service is unavailable.");

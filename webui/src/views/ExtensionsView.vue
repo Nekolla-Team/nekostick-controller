@@ -107,6 +107,10 @@ function formatFileSize(size: number): string {
 
 function uploadFailureMessage(entry: UploadEntry): string {
   if (entry.error instanceof ApiClientError) {
+    // The install endpoint reports the concrete rejection reason in the envelope message;
+    // prefer it over the generic per-kind text so users see what to fix.
+    const reported = entry.error.message?.trim()
+    if (reported) return reported
     if (entry.error.code === 'downgrade_forbidden') return t('extensions.install.downgradeForbidden')
     if (entry.error.kind !== 'network') {
       const key = `errors.byKind.${entry.error.kind}`

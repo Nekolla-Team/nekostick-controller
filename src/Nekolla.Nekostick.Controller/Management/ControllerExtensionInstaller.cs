@@ -30,12 +30,14 @@ internal enum ControllerExtensionInstallOutcome
 /// When the install failed after the previous directory had been moved aside, whether restoring
 /// that backup succeeded; <see langword="null" /> when no restore step was attempted.
 /// </param>
+/// <param name="Reason">The client-facing failure reason when the package or version was rejected.</param>
 internal sealed record ControllerExtensionInstallResult(
     ControllerExtensionInstallOutcome Outcome,
     string? Id,
     string? Version,
     bool Replaced,
-    bool? RestoreSucceeded);
+    bool? RestoreSucceeded,
+    string? Reason);
 
 /// <summary>
 /// Installs uploaded extension zip packages into the host extensions root. The root is derived
@@ -91,7 +93,7 @@ internal static class ControllerExtensionInstaller
         ArgumentNullException.ThrowIfNull(package);
         if (ResolveExtensionsRoot() is not { } root)
         {
-            return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.StorageUnavailable, null, null, false, null);
+            return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.StorageUnavailable, null, null, false, null, null);
         }
 
         var stagingPath = Path.Combine(Path.GetTempPath(), "nekostick-install-" + Guid.NewGuid().ToString("N"));
@@ -99,18 +101,22 @@ internal static class ControllerExtensionInstaller
         {
             if (!await TryCopyBoundedAsync(package, stagingPath, cancellationToken).ConfigureAwait(false))
             {
-                return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.InvalidPackage, null, null, false, null);
+                return new ControllerExtensionInstallResult(
+                    ControllerExtensionInstallOutcome.InvalidPackage, null, null, false, null,
+                    $"The extension package exceeds the {MaximumPackageBytes / (1024 * 1024)} MiB size limit.");
             }
 
             using var archive = OpenArchive(stagingPath);
             if (archive is null)
             {
-                return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.InvalidPackage, null, null, false, null);
+                return new ControllerExtensionInstallResult(
+                    ControllerExtensionInstallOutcome.InvalidPackage, null, null, false, null,
+                    "The uploaded package is not a readable zip archive.");
             }
 
-            if (!TryReadManifest(archive, out var id, out var version))
+            if (!TryReadManifest(archive, out var id, out var version, out var manifestReason))
             {
-                return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.InvalidPackage, null, null, false, null);
+                return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.InvalidPackage, null, null, false, null, manifestReason);
             }
 
             var targetPath = Path.Combine(root, id);
@@ -118,17 +124,19 @@ internal static class ControllerExtensionInstaller
                 TryReadInstalledVersion(targetPath, out var installedVersion) &&
                 CompareVersions(installedVersion, version) > 0)
             {
-                return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.DowngradeForbidden, id, version, false, null);
+                return new ControllerExtensionInstallResult(
+                    ControllerExtensionInstallOutcome.DowngradeForbidden, id, version, false, null,
+                    $"The installed extension version {installedVersion} is newer than the uploaded package version {version}.");
             }
 
-            var extractOutcome = TryExtract(archive, root, targetPath, out var replaced, out var restoreSucceeded);
+            var extractOutcome = TryExtract(archive, root, targetPath, out var replaced, out var restoreSucceeded, out var extractReason);
             if (extractOutcome != ControllerExtensionInstallOutcome.Installed)
             {
-                return new ControllerExtensionInstallResult(extractOutcome, id, version, false, restoreSucceeded);
+                return new ControllerExtensionInstallResult(extractOutcome, id, version, false, restoreSucceeded, extractReason);
             }
 
             WriteLog(ExtensionLogLevel.Information, $"Installed extension {id} {version} into '{targetPath}' (replaced: {replaced}).");
-            return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.Installed, id, version, replaced, null);
+            return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.Installed, id, version, replaced, null, null);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -137,12 +145,12 @@ internal static class ControllerExtensionInstaller
         catch (IOException exception)
         {
             WriteLog(ExtensionLogLevel.Warning, $"Extension install failed with a storage error under '{root}' (staged package '{stagingPath}'): {Describe(exception)}");
-            return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.StorageUnavailable, null, null, false, null);
+            return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.StorageUnavailable, null, null, false, null, null);
         }
         catch (UnauthorizedAccessException exception)
         {
             WriteLog(ExtensionLogLevel.Warning, $"Extension install failed with an access error under '{root}' (staged package '{stagingPath}'): {Describe(exception)}");
-            return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.StorageUnavailable, null, null, false, null);
+            return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.StorageUnavailable, null, null, false, null, null);
         }
         finally
         {
@@ -222,13 +230,21 @@ internal static class ControllerExtensionInstaller
         }
     }
 
-    private static bool TryReadManifest(ZipArchive archive, out string id, out string version)
+    private static bool TryReadManifest(ZipArchive archive, out string id, out string version, out string? reason)
     {
         id = string.Empty;
         version = string.Empty;
+        reason = null;
         var entry = archive.GetEntry(ManifestFileName);
-        if (entry is null || entry.Length > ControllerAdmissionLimits.MaximumRequestBodyBytes)
+        if (entry is null)
         {
+            reason = "The extension package has no manifest.json at the zip root.";
+            return false;
+        }
+
+        if (entry.Length > ControllerAdmissionLimits.MaximumRequestBodyBytes)
+        {
+            reason = $"The manifest.json exceeds the {ControllerAdmissionLimits.MaximumRequestBodyBytes / (1024 * 1024)} MiB size limit.";
             return false;
         }
 
@@ -236,21 +252,43 @@ internal static class ControllerExtensionInstaller
         {
             using var stream = entry.Open();
             using var document = JsonDocument.Parse(stream, new JsonDocumentOptions { MaxDepth = 16 });
-            if (document.RootElement.ValueKind != JsonValueKind.Object ||
-                !document.RootElement.TryGetProperty("id", out var idElement) ||
-                idElement.ValueKind != JsonValueKind.String ||
-                !document.RootElement.TryGetProperty("version", out var versionElement) ||
-                versionElement.ValueKind != JsonValueKind.String)
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
             {
+                reason = "The manifest.json root must be a JSON object.";
+                return false;
+            }
+
+            if (!document.RootElement.TryGetProperty("id", out var idElement) || idElement.ValueKind != JsonValueKind.String)
+            {
+                reason = "The manifest.json is missing a string 'id' field.";
+                return false;
+            }
+
+            if (!document.RootElement.TryGetProperty("version", out var versionElement) || versionElement.ValueKind != JsonValueKind.String)
+            {
+                reason = "The manifest.json is missing a string 'version' field.";
                 return false;
             }
 
             id = idElement.GetString() ?? string.Empty;
             version = versionElement.GetString() ?? string.Empty;
-            return IsValidExtensionId(id) && TrySplitVersion(version, out _, out _);
+            if (!IsValidExtensionId(id))
+            {
+                reason = $"The manifest id '{id}' is invalid; use dot or dash separated lowercase alphanumeric segments, at most 128 characters.";
+                return false;
+            }
+
+            if (!TrySplitVersion(version, out _, out _))
+            {
+                reason = $"The manifest version '{version}' is not a valid semantic version.";
+                return false;
+            }
+
+            return true;
         }
-        catch (JsonException)
+        catch (JsonException exception)
         {
+            reason = "The manifest.json is not valid JSON: " + exception.Message;
             return false;
         }
         catch (InvalidDataException)
@@ -337,10 +375,12 @@ internal static class ControllerExtensionInstaller
         string root,
         string targetPath,
         out bool replaced,
-        out bool? restoreSucceeded)
+        out bool? restoreSucceeded,
+        out string? reason)
     {
         replaced = false;
         restoreSucceeded = null;
+        reason = null;
         var stagingDirectory = Path.Combine(root, ".install-" + Guid.NewGuid().ToString("N"));
         try
         {
@@ -357,12 +397,14 @@ internal static class ControllerExtensionInstaller
                 var destination = Path.GetFullPath(Path.Combine(stagingRoot, relativePath));
                 if (!destination.StartsWith(stagingRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
                 {
+                    reason = $"The package entry '{entry.FullName}' escapes the target directory.";
                     return ControllerExtensionInstallOutcome.InvalidPackage;
                 }
 
                 extractedTotal += entry.Length;
                 if (extractedTotal > MaximumExtractedBytes)
                 {
+                    reason = $"The extracted package contents exceed the {MaximumExtractedBytes / (1024 * 1024)} MiB limit.";
                     return ControllerExtensionInstallOutcome.InvalidPackage;
                 }
 

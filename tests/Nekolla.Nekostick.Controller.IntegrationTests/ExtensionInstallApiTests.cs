@@ -115,6 +115,9 @@ public sealed class ExtensionInstallApiTests(ControllerApiFixture fixture) : ICl
             using var envelope = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
             Assert.False(envelope.RootElement.GetProperty("ok").GetBoolean());
             Assert.Equal("downgrade_forbidden", envelope.RootElement.GetProperty("code").GetString());
+            var message = envelope.RootElement.GetProperty("message").GetString();
+            Assert.Contains("2.0.0", message, StringComparison.Ordinal);
+            Assert.Contains("1.9.9", message, StringComparison.Ordinal);
             var installedManifest = await File.ReadAllTextAsync(Path.Combine(root, "nekolla.nekostick.installed", "manifest.json"), TestContext.Current.CancellationToken);
             Assert.Contains("2.0.0", installedManifest, StringComparison.Ordinal);
         }
@@ -138,6 +141,7 @@ public sealed class ExtensionInstallApiTests(ControllerApiFixture fixture) : ICl
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
             using var envelope = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
             Assert.Equal("invalid_request", envelope.RootElement.GetProperty("code").GetString());
+            Assert.Contains("not a readable zip", envelope.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
         }
         finally
         {
@@ -172,6 +176,29 @@ public sealed class ExtensionInstallApiTests(ControllerApiFixture fixture) : ICl
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
             using var envelope = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
             Assert.Equal("invalid_request", envelope.RootElement.GetProperty("code").GetString());
+            Assert.Contains("manifest.json", envelope.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            CleanupRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task Install_InvalidManifestId_ReportsTheReason()
+    {
+        var root = CreateExtensionsRoot();
+        ControllerExtensionInstaller.SetRootPathOverride(() => root);
+        try
+        {
+            using var client = fixture.CreateHttpClient();
+
+            var response = await PostPackageAsync(client, BuildPackage("Bad_Identifier", "1.0.0"));
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            using var envelope = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+            Assert.Equal("invalid_request", envelope.RootElement.GetProperty("code").GetString());
+            Assert.Contains("Bad_Identifier", envelope.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
         }
         finally
         {

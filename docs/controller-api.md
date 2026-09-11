@@ -433,7 +433,7 @@ extension record 是只读信息：
 }
 ```
 
-该端点只接受流式传输：HTTP/JSON 与 Unix socket 直接可用；HostRoute 需要 Host API >=1.3.2 的 streaming handler（旧 Host 的 buffered 路由返回 `501 unsupported`），且 body 上限受 Host 全局 `maxRequestBodyBytes` 约束。gRPC 不支持。其余错误：`400 invalid_request`（zip 损坏、缺少/非法 manifest、超限）、`503 storage_unavailable`（扩展目录不可写）。
+该端点只接受流式传输：HTTP/JSON 与 Unix socket 直接可用；HostRoute 需要 Host API >=1.3.2 的 streaming handler（旧 Host 的 buffered 路由返回 `501 unsupported`），且 body 上限受 Host 全局 `maxRequestBodyBytes` 约束。gRPC 不支持。其余错误：`400 invalid_request`（zip 损坏、缺少/非法 manifest、超限；`message` 会给出具体拒绝原因）、`409 downgrade_forbidden`（`message` 含已安装与上传版本号）、`503 storage_unavailable`（扩展目录不可写）。
 
 `skipped` 逐项报告本次扫描中被跳过的目录：`directoryName` 是目录叶子名（不含完整路径），`failureCode` 是稳定的失败类别名（如 `ManifestMissing`、`JsonInvalid`）。Host API 低于 `1.3.4` 时 `skipped` 为 `null`；更早版本（低于 `1.3.1`）不提供该端点，返回 `501 unsupported`。
 

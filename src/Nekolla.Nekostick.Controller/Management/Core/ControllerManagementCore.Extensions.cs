@@ -53,8 +53,12 @@ internal sealed partial class ControllerManagementCore
         {
             return result.Outcome switch
             {
-                ControllerExtensionInstallOutcome.InvalidPackage => ControllerManagementResponseBuilder.InvalidRequest,
-                ControllerExtensionInstallOutcome.DowngradeForbidden => ControllerManagementResponseBuilder.DowngradeForbidden,
+                ControllerExtensionInstallOutcome.InvalidPackage => result.Reason is { } invalidReason
+                    ? ControllerManagementResponseBuilder.InvalidRequestWithReason(invalidReason)
+                    : ControllerManagementResponseBuilder.InvalidRequest,
+                ControllerExtensionInstallOutcome.DowngradeForbidden => result.Reason is { } downgradeReason
+                    ? ControllerManagementResponseBuilder.DowngradeForbiddenWithReason(downgradeReason)
+                    : ControllerManagementResponseBuilder.DowngradeForbidden,
                 _ => result.RestoreSucceeded is { } restored
                     ? ControllerManagementResponseBuilder.StorageUnavailableWithRestore(restored)
                     : ControllerManagementResponseBuilder.StorageUnavailable
