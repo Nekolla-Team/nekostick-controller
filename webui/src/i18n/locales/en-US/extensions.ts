@@ -21,6 +21,18 @@ export const extensions = {
     button: 'Refresh directory',
     summary: '{added} added, {updated} version-updated, {missing} missing, {skipped} skipped',
   },
+  install: {
+    button: 'Add / update extension',
+    title: 'Add / update extension',
+    dropHint: 'Drop .zip extension packages here, or click to choose files.',
+    pending: 'Pending',
+    uploading: 'Uploading…',
+    done: 'Installed {id}@{version}',
+    replaced: 'Replaced',
+    failed: 'Upload failed',
+    downgradeForbidden: 'The installed extension is newer than this package, so it cannot be downgraded.',
+    genericFailure: 'The extension package could not be uploaded. Please try again.',
+  },
   settings: {
     title: 'Extension settings',
     deleteButton: 'Delete settings',

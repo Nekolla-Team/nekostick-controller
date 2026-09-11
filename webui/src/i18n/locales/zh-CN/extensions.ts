@@ -21,6 +21,18 @@ export const extensions = {
     button: '刷新目录',
     summary: '新增 {added} 个，版本更新 {updated} 个，缺失 {missing} 个，跳过 {skipped} 个',
   },
+  install: {
+    button: '添加/更新扩展',
+    title: '添加/更新扩展',
+    dropHint: '将 .zip 扩展包拖到这里，或点击选择文件。',
+    pending: '等待上传',
+    uploading: '正在上传…',
+    done: '已安装 {id}@{version}',
+    replaced: '已替换',
+    failed: '上传失败',
+    downgradeForbidden: '已安装的扩展版本更新，不能降级为此安装包。',
+    genericFailure: '扩展包上传失败，请稍后重试。',
+  },
   settings: {
     title: '扩展设置',
     deleteButton: '删除 settings',

@@ -350,6 +350,11 @@ export interface ExtensionRecord {
   manifestVersion: string | null;
   contentHash: string | null;
 }
+export interface ExtensionInstallResult {
+  id: string;
+  version: string;
+  replaced: boolean;
+}
 
 export interface ExtensionScanSkip {
   directoryName: string;
