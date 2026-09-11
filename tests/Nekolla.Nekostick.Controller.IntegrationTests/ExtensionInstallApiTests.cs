@@ -180,6 +180,36 @@ public sealed class ExtensionInstallApiTests(ControllerApiFixture fixture) : ICl
     }
 
     [Fact]
+    public async Task Install_WhenRootUnwritable_ReturnsStorageUnavailableAndLogsFailure()
+    {
+        var blockingFile = Path.Combine(Path.GetTempPath(), "nekostick-install-root-blocker-" + Guid.NewGuid().ToString("N"));
+        await File.WriteAllTextAsync(blockingFile, "not a directory", TestContext.Current.CancellationToken);
+        ControllerExtensionInstaller.SetRootPathOverride(() => blockingFile);
+        try
+        {
+            using var client = fixture.CreateHttpClient();
+
+            var response = await PostPackageAsync(client, BuildPackage("nekolla.nekostick.installed", "1.0.0"));
+
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+            using var envelope = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+            Assert.Equal("storage_unavailable", envelope.RootElement.GetProperty("code").GetString());
+            Assert.Contains("Extension install failed", fixture.Host.LastLogText, StringComparison.Ordinal);
+        }
+        finally
+        {
+            ControllerExtensionInstaller.SetRootPathOverride(null);
+            try
+            {
+                File.Delete(blockingFile);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    [Fact]
     public async Task Install_WithoutApiKey_ReturnsUnauthorized()
     {
         using var client = fixture.CreateHttpClient(withApiKey: false);

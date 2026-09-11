@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.IO.Compression;
 using System.Text.Json;
+using Nekolla.Nekostick.Contracts;
 
 namespace Nekolla.Nekostick.Controller.Management;
 
@@ -58,6 +59,25 @@ internal static class ControllerExtensionInstaller
 
     private static Func<string?>? _rootPathOverride;
 
+    private static volatile IExtensionLogWriter? _logWriter;
+
+    /// <summary>Sets the host-attributed log writer for install diagnostics; called by the entrypoint lifecycle.</summary>
+    internal static void SetLogWriter(IExtensionLogWriter? logWriter) => _logWriter = logWriter;
+
+    private static void WriteLog(ExtensionLogLevel level, string message)
+    {
+        try
+        {
+            _logWriter?.WriteText(level, message);
+        }
+        catch (Exception)
+        {
+            // Diagnostics must never fail an install.
+        }
+    }
+
+    private static string Describe(Exception exception) => exception.GetType().Name + ": " + exception.Message;
+
     /// <summary>Overrides the extensions root for tests; pass <see langword="null" /> to restore derivation.</summary>
     internal static void SetRootPathOverride(Func<string?>? rootPathOverride) => _rootPathOverride = rootPathOverride;
 
@@ -107,18 +127,21 @@ internal static class ControllerExtensionInstaller
                 return new ControllerExtensionInstallResult(extractOutcome, id, version, false, restoreSucceeded);
             }
 
+            WriteLog(ExtensionLogLevel.Information, $"Installed extension {id} {version} into '{targetPath}' (replaced: {replaced}).");
             return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.Installed, id, version, replaced, null);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (IOException)
+        catch (IOException exception)
         {
+            WriteLog(ExtensionLogLevel.Warning, $"Extension install failed with a storage error under '{root}' (staged package '{stagingPath}'): {Describe(exception)}");
             return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.StorageUnavailable, null, null, false, null);
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException exception)
         {
+            WriteLog(ExtensionLogLevel.Warning, $"Extension install failed with an access error under '{root}' (staged package '{stagingPath}'): {Describe(exception)}");
             return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.StorageUnavailable, null, null, false, null);
         }
         finally
@@ -150,11 +173,18 @@ internal static class ControllerExtensionInstaller
         var location = typeof(ControllerEntrypoint).Assembly.Location;
         if (string.IsNullOrEmpty(location))
         {
+            WriteLog(ExtensionLogLevel.Warning, "Extension install failed: the controller assembly location is empty (single-file deployment?), so the extensions root cannot be derived.");
             return null;
         }
 
         var extensionDirectory = Path.GetDirectoryName(location);
-        return extensionDirectory is null ? null : Path.GetDirectoryName(extensionDirectory);
+        var root = extensionDirectory is null ? null : Path.GetDirectoryName(extensionDirectory);
+        if (root is null)
+        {
+            WriteLog(ExtensionLogLevel.Warning, $"Extension install failed: the extensions root cannot be derived from the controller assembly location '{location}'.");
+        }
+
+        return root;
     }
 
     private static async ValueTask<bool> TryCopyBoundedAsync(Stream package, string stagingPath, CancellationToken cancellationToken)
@@ -364,10 +394,11 @@ internal static class ControllerExtensionInstaller
 
                     Directory.Move(targetPath, backupPath);
                 }
-                catch (Exception)
+                catch (Exception exception)
                 {
                     // The backup rename failed before anything moved, so the previous installation
                     // is still in place and no restore step is needed.
+                    WriteLog(ExtensionLogLevel.Warning, $"Extension install failed: could not move the previous installation '{targetPath}' aside to '{backupPath}': {Describe(exception)}");
                     return ControllerExtensionInstallOutcome.StorageUnavailable;
                 }
             }
@@ -376,8 +407,9 @@ internal static class ControllerExtensionInstaller
             {
                 Directory.Move(stagingDirectory, targetPath);
             }
-            catch (Exception)
+            catch (Exception exception)
             {
+                WriteLog(ExtensionLogLevel.Warning, $"Extension install failed: could not move the staged directory '{stagingDirectory}' into place at '{targetPath}': {Describe(exception)}");
                 if (backupPath is not null)
                 {
                     restoreSucceeded = TryRestoreBackup(backupPath, targetPath);
@@ -424,8 +456,9 @@ internal static class ControllerExtensionInstaller
             Directory.Move(backupPath, targetPath);
             return true;
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            WriteLog(ExtensionLogLevel.Warning, $"Extension install failed: could not restore the backup '{backupPath}' to '{targetPath}': {Describe(exception)}");
             return false;
         }
     }
@@ -439,9 +472,10 @@ internal static class ControllerExtensionInstaller
                 Directory.Delete(backupPath, recursive: true);
             }
         }
-        catch (Exception)
+        catch (Exception exception)
         {
             // Best-effort backup cleanup; the residue is overwritten by the next install.
+            WriteLog(ExtensionLogLevel.Warning, $"Extension install left a backup directory at '{backupPath}' that could not be deleted: {Describe(exception)}");
         }
     }
 

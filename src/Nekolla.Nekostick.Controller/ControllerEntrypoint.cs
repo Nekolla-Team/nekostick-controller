@@ -68,6 +68,7 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
         try
         {
             var host13 = EnsureHostApiCompatibility(context);
+            ControllerExtensionInstaller.SetLogWriter(host13.LogWriter);
 
             if (_successfullyStopped)
             {
@@ -435,6 +436,7 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
             runtime.DisposeStoppedAdapters();
             _runtime = null;
             _startupFailed = false;
+            ControllerExtensionInstaller.SetLogWriter(null);
             if (startupCompleted || hadRegisteredHandler)
             {
                 _successfullyStopped = true;
