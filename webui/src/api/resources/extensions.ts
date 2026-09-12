@@ -166,8 +166,17 @@ export function getExtension(id: string): Promise<ExtensionRecord> {
   return readResource<ExtensionRecord>(extensionPath(id));
 }
 
-export function getSettings(id: string): Promise<ExtensionSettings> {
-  return readResource<ExtensionSettings>(settingsPath(id));
+export async function getSettings(id: string): Promise<ExtensionSettings> {
+  try {
+    return await readResource<ExtensionSettings>(settingsPath(id));
+  } catch (error: unknown) {
+    // `no_settings` means the record exists without a persisted document, which clients treat
+    // as an empty document they may create with the conditional PUT.
+    if (error instanceof ApiClientError && error.kind === 'no_settings') {
+      return { extensionId: id, schemaVersion: 1, settings: {}, version: 0 };
+    }
+    throw error;
+  }
 }
 
 export function putSettings(

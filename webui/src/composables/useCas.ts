@@ -150,7 +150,16 @@ export function useCas(queryClient?: QueryClientLike): {
   const client = queryClient ?? queryClientFromContext();
 
   async function run<T>(path: string, mutate: (ifMatch: string) => Promise<T> | T): Promise<T> {
-    const latest = await request('GET', path);
+    const latest: { etag: string | undefined; status?: number } = await request('GET', path).catch(
+      // A recorded parent whose settings document was never created answers 404 with the
+      // aggregate ETag, so the first conditional create can start from that answer.
+      (error: unknown): { etag: string } => {
+        if (error instanceof ApiClientError && error.kind === 'no_settings' && error.etag !== undefined) {
+          return { etag: error.etag };
+        }
+        throw error;
+      },
+    );
     const ifMatch = latest.etag;
     if (ifMatch === undefined) {
       throw new ApiClientError('The latest resource version is unavailable.', {

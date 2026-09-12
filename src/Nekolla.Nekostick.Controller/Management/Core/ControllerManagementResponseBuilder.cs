@@ -40,6 +40,12 @@ internal static class ControllerManagementResponseBuilder
     internal static ControllerManagementResponse Unauthorized => Error(401, ControllerDispatchCode.Unauthorized, "unauthorized", "The management API key is invalid.");
     internal static ControllerManagementResponse TransportDisabled => Error(404, ControllerDispatchCode.TransportDisabled, "transport_disabled", "The management transport is disabled.");
     internal static ControllerManagementResponse NotFound => Error(404, ControllerDispatchCode.NotFound, "not_found", "The management resource was not found.");
+    /// <summary>Reports a recorded extension whose settings document has not been created.</summary>
+    /// <remarks>
+    /// The response carries the aggregate ETag so a client can create the document with one
+    /// conditional PUT directly from this answer.
+    /// </remarks>
+    internal static ControllerManagementResponse SettingsAbsent(long version) => Create(404, ControllerDispatchCode.NotFound, new ControllerResponseEnvelope { Ok = false, Code = "no_settings", Message = "The extension settings document has not been created." }, version);
     internal static ControllerManagementResponse Conflict => Error(409, ControllerDispatchCode.Conflict, "conflict", "The management resource conflicts with current state.");
     internal static ControllerManagementResponse PreconditionRequired => Error(428, ControllerDispatchCode.InvalidRequest, "precondition_required", "Exactly one If-Match precondition is required.");
     internal static ControllerManagementResponse PreconditionFailed => Error(412, ControllerDispatchCode.Conflict, "precondition_failed", "The supplied If-Match precondition is stale.");

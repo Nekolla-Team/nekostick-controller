@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { request } from '../src/api/client';
+import { putSettings } from '../src/api/resources/extensions';
 import { invalidate, getVersion } from '../src/api/etag';
 import { buildMergePatch, useCas } from '../src/composables/useCas';
 import { saveConnection } from '../src/stores/connection';
@@ -79,5 +80,54 @@ describe('useCas', () => {
     expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
       queryKey: ['routes', 'route-id'],
     });
+  });
+
+  it('creates an absent settings document from the ETag of the 404 no_settings answer', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        apiVersion: 1,
+        ok: false,
+        code: 'no_settings',
+        message: 'The extension settings document has not been created.',
+        data: null,
+        version: null,
+      }), { status: 404, headers: { ETag: '"9"' } }))
+      .mockResolvedValueOnce(new Response(envelope({
+        extensionId: 'nekolla.sample',
+        schemaVersion: 1,
+        settings: { theme: 'dark' },
+        version: 1,
+      }, 10), { status: 200, headers: { ETag: '"10"' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { run } = useCas({ invalidateQueries: vi.fn().mockResolvedValue(undefined) });
+
+    await run('/v1/extensions/nekolla.sample/settings', (ifMatch) => putSettings(
+      'nekolla.sample',
+      { schemaVersion: 1, settings: { theme: 'dark' } },
+      ifMatch,
+    ));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({
+      headers: expect.objectContaining({ 'If-Match': '"9"' }),
+    });
+    expect(getVersion('/v1/extensions/nekolla.sample/settings')).toBe('"10"');
+  });
+
+  it('keeps a missing extension record fatal instead of creating it', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      apiVersion: 1,
+      ok: false,
+      code: 'not_found',
+      message: 'The management resource was not found.',
+      data: null,
+      version: null,
+    }), { status: 404, headers: { ETag: '"9"' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { run } = useCas({ invalidateQueries: vi.fn().mockResolvedValue(undefined) });
+
+    await expect(run('/v1/extensions/nekolla.ghost/settings', () => { throw new Error('unreachable'); }))
+      .rejects.toMatchObject({ kind: 'not_found' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { installExtensionPackage } from '../src/api/resources/extensions'
+import { installExtensionPackage, getSettings } from '../src/api/resources/extensions'
 import { saveConnection } from '../src/stores/connection'
 
 type ProgressHandler = ((event: ProgressEvent<EventTarget>) => void) | null
@@ -57,6 +57,39 @@ function errorEnvelope(code: string, message: string): string {
     version: null,
   })
 }
+
+describe('extension settings resource', () => {
+  beforeEach(() => {
+    saveConnection('http://127.0.0.1:48123', 'test-key')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('reports an absent settings document as an empty document', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(errorEnvelope(
+      'no_settings',
+      'The extension settings document has not been created.',
+    ), { status: 404, headers: { ETag: '"9"' } })))
+
+    await expect(getSettings('nekolla.sample')).resolves.toEqual({
+      extensionId: 'nekolla.sample',
+      schemaVersion: 1,
+      settings: {},
+      version: 0,
+    })
+  })
+
+  it('keeps an unknown extension record an error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      errorEnvelope('not_found', 'The management resource was not found.'),
+      { status: 404 },
+    )))
+
+    await expect(getSettings('nekolla.ghost')).rejects.toMatchObject({ kind: 'not_found' })
+  })
+})
 
 describe('extension package upload resource', () => {
   beforeEach(() => {

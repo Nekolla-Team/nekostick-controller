@@ -63,8 +63,17 @@ public sealed class ExtensionsApiTests(ControllerApiFixture fixture) : IClassFix
         var cancellationToken = TestContext.Current.CancellationToken;
         var settingsPath = $"/v1/extensions/{ControllerApiFixture.TestExtensionId}/settings";
 
-        var firstVersion = await ReadEtagAsync(client, "/v1/global-settings", cancellationToken);
-        using var firstRequest = CreateJsonRequest(HttpMethod.Put, settingsPath, """{"schemaVersion":1,"settings":{"theme":"dark"}}""", firstVersion);
+        // The record exists without any persisted document: the answer is `no_settings` (not
+        // `not_found`) and still carries the aggregate ETag that the first create must supply.
+        using var missing = await client.GetAsync(settingsPath, cancellationToken);
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        using var missingDocument = JsonDocument.Parse(await missing.Content.ReadAsStringAsync(cancellationToken));
+        AssertErrorEnvelope(missingDocument.RootElement, "no_settings");
+        Assert.True(missing.Headers.TryGetValues(ControllerManagementApiContract.ETagHeaderName, out var missingEtags));
+        var createVersion = Assert.Single(missingEtags);
+        Assert.Equal(await ReadEtagAsync(client, "/v1/global-settings", cancellationToken), createVersion);
+
+        using var firstRequest = CreateJsonRequest(HttpMethod.Put, settingsPath, """{"schemaVersion":1,"settings":{"theme":"dark"}}""", createVersion);
         using var first = await client.SendAsync(firstRequest, cancellationToken);
         Assert.Equal(HttpStatusCode.OK, first.StatusCode);
         using var firstDocument = JsonDocument.Parse(await first.Content.ReadAsStringAsync(cancellationToken));
@@ -88,10 +97,13 @@ public sealed class ExtensionsApiTests(ControllerApiFixture fixture) : IClassFix
         using var delete = await client.SendAsync(deleteRequest, cancellationToken);
         Assert.Equal(HttpStatusCode.NoContent, delete.StatusCode);
 
-        using var gone = await client.GetAsync(settingsPath, cancellationToken);
-        Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
-        using var goneDocument = JsonDocument.Parse(await gone.Content.ReadAsStringAsync(cancellationToken));
-        AssertErrorEnvelope(goneDocument.RootElement, "not_found");
+        // DELETE removes only the document; the existing record reports `no_settings` again and
+        // keeps offering the aggregate ETag for a later re-create.
+        using var cleared = await client.GetAsync(settingsPath, cancellationToken);
+        Assert.Equal(HttpStatusCode.NotFound, cleared.StatusCode);
+        using var clearedDocument = JsonDocument.Parse(await cleared.Content.ReadAsStringAsync(cancellationToken));
+        AssertErrorEnvelope(clearedDocument.RootElement, "no_settings");
+        Assert.True(cleared.Headers.Contains(ControllerManagementApiContract.ETagHeaderName));
     }
 
     [Fact]

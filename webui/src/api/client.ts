@@ -5,6 +5,7 @@ import type { Envelope } from './types';
 export type ApiErrorKind =
   | 'unauthorized'
   | 'not_found'
+  | 'no_settings'
   | 'transport_disabled'
   | 'reserved_route'
   | 'conflict'
@@ -38,12 +39,15 @@ export interface ApiClientErrorDetails {
   status?: number;
   code?: string;
   kind: ApiErrorKind;
+  etag?: string;
 }
 
 export class ApiClientError extends Error {
   readonly status: number | undefined;
   readonly code: string | undefined;
   readonly kind: ApiErrorKind;
+  /** Strong ETag carried by the failing response, when the controller sends one. */
+  readonly etag: string | undefined;
   readonly details: ApiClientErrorDetails;
 
   constructor(message: string, details: ApiClientErrorDetails) {
@@ -52,6 +56,7 @@ export class ApiClientError extends Error {
     this.status = details.status;
     this.code = details.code;
     this.kind = details.kind;
+    this.etag = details.etag;
     this.details = details;
     Object.setPrototypeOf(this, new.target.prototype);
   }
@@ -176,6 +181,8 @@ function kindFor(status: number, code: string | undefined): ApiErrorKind {
       return 'transport_disabled';
     case 'not_found':
       return 'not_found';
+    case 'no_settings':
+      return 'no_settings';
     case 'reserved_route':
       return 'reserved_route';
     case 'precondition_failed':
@@ -214,12 +221,13 @@ function redirectToConnect(): void {
   }
 }
 
-function throwResponseError(status: number, envelope: Envelope<unknown>): never {
+function throwResponseError(status: number, envelope: Envelope<unknown>, etag: string | undefined): never {
   const kind = kindFor(status, envelope.code);
   const error = new ApiClientError(envelope.message || envelope.code, {
     status,
     code: envelope.code,
     kind,
+    etag,
   });
   if (kind === 'unauthorized') {
     clearConnection();
@@ -275,7 +283,7 @@ async function parseResponse(response: Response): Promise<ParsedResponse> {
   }
 
   if (status < 200 || status >= 300 || !parsed.ok) {
-    throwResponseError(status, parsed);
+    throwResponseError(status, parsed, etag);
   }
 
   return {

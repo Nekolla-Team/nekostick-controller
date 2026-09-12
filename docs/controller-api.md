@@ -165,7 +165,7 @@ key 必须恰好出现一次，长度 `32..4096`，不能包含空白。HTTP、U
 | `message` | 固定人类可读文本，不适合程序化分支 |
 | `version` | 需要聚合版本的成功响应（包括 reload-settings）的 Host 聚合版本；state、runtime telemetry 和 runtime action 固定为 `null` |
 
-持久化配置和 `reload-settings` 成功响应带强 ETag，例如 `ETag: "42"`；state、runtime telemetry 和 runtime action 成功响应不带 ETag。
+持久化配置和 `reload-settings` 成功响应带强 ETag，例如 `ETag: "42"`；state、runtime telemetry 和 runtime action 成功响应不带 ETag。唯一带 ETag 的失败响应是 extension settings 的 `404 no_settings`（见 6.6），它同样携带聚合版本，供客户端直接完成条件创建。
 
 ### 状态码
 
@@ -177,6 +177,7 @@ key 必须恰好出现一次，长度 `32..4096`，不能包含空白。HTTP、U
 | 401 | `unauthorized` | API key 无效 |
 | 404 | `transport_disabled` | 当前 transport 未启用 |
 | 404 | `not_found` | 资源不存在 |
+| 404 | `no_settings` | extension record 存在但没有 settings 文档；响应带聚合 ETag |
 | 405 | `method_not_allowed` | 已识别资源不支持该 method |
 | 409 | `reserved_route` | 操作触及控制器保留 route |
 | 409 | `downgrade_forbidden` | 扩展安装包版本低于已安装版本 |
@@ -451,6 +452,8 @@ extension settings 是扩展自己的 opaque JSON。GET 返回：
 ```
 
 PUT body 只有 `schemaVersion` 和 `settings`；extension identity 来自 URL。extension record 必须已经存在。DELETE 只删除 settings，不删除 extension record。控制器不解释 `settings` 的业务字段。
+
+record 存在但还没有持久化 settings 文档时（从未写过，或已被 DELETE 删除），`GET` 返回 `404 no_settings`（区别于 record 不存在时的 `404 not_found`），并且该失败响应仍带聚合 `ETag`——客户端可以直接把它作为 `If-Match` 提交 `PUT` 完成首次创建，不需要先读别的资源。客户端应把 `no_settings` 视为空文档。
 
 ## 7. Bootstrap 与安全
 
