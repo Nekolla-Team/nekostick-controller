@@ -20,6 +20,7 @@ namespace Nekolla.Nekostick.Controller.Adapters.HttpUnix;
 internal sealed class HttpUnixKestrelAdapter : IDisposable
 {
     private const string ApiKeyHeaderName = "x-nekostick-controller-key";
+    private const string WebUiHtmlContentType = "text/html";
     private static readonly HashSet<string> HopByHopHeaders = new(StringComparer.OrdinalIgnoreCase)
     {
         "connection",
@@ -351,23 +352,31 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
 
         var requestPath = context.Request.Path.Value ?? string.Empty;
         if (string.Equals(context.Request.Method, "GET", StringComparison.OrdinalIgnoreCase) &&
-            ControllerWebUiResource.IsRootPath(requestPath) &&
             ControllerManagementDispatcherOptions.GetCurrent(dispatcher, startupOptions).EnableWebUi)
         {
-            var resource = ControllerWebUiResource.OpenRead();
-            if (resource is not null)
+            if (ControllerWebUiResource.IsRootPath(requestPath))
             {
-                try
+                var shell = ControllerWebUiResource.OpenRead();
+                if (shell is not null)
                 {
-                    await WriteWebUiResponseAsync(context, resource, cancellationToken).ConfigureAwait(false);
+                    await WriteWebUiResourceAsync(
+                        context,
+                        shell,
+                        WebUiHtmlContentType,
+                        cacheControl: null,
+                        cancellationToken).ConfigureAwait(false);
+                    return;
                 }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                }
-                catch (IOException) when (!cancellationToken.IsCancellationRequested)
-                {
-                }
-
+            }
+            else if (ControllerWebUiResource.TryGetAssetFileName(requestPath, hostRoutePath: null, out var assetName) &&
+                ControllerWebUiResource.OpenAsset(assetName) is { } asset)
+            {
+                await WriteWebUiResourceAsync(
+                    context,
+                    asset,
+                    ControllerWebUiResource.ContentTypeFor(assetName),
+                    ControllerWebUiResource.AssetCacheControl,
+                    cancellationToken).ConfigureAwait(false);
                 return;
             }
         }
@@ -503,17 +512,33 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
         await WriteResponseAsync(context, response, cancellationToken).ConfigureAwait(false);
     }
 
-    private static async ValueTask WriteWebUiResponseAsync(
+    private static async ValueTask WriteWebUiResourceAsync(
         HttpContext context,
         Stream resource,
+        string contentType,
+        string? cacheControl,
         CancellationToken cancellationToken)
     {
-        await using (resource.ConfigureAwait(false))
+        try
         {
-            context.Response.StatusCode = StatusCodes.Status200OK;
-            context.Response.ContentType = "text/html";
-            context.Response.ContentLength = resource.Length;
-            await resource.CopyToAsync(context.Response.Body, cancellationToken).ConfigureAwait(false);
+            await using (resource.ConfigureAwait(false))
+            {
+                context.Response.StatusCode = StatusCodes.Status200OK;
+                context.Response.ContentType = contentType;
+                context.Response.ContentLength = resource.Length;
+                if (cacheControl is not null)
+                {
+                    context.Response.Headers.CacheControl = cacheControl;
+                }
+
+                await resource.CopyToAsync(context.Response.Body, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (IOException) when (!cancellationToken.IsCancellationRequested)
+        {
         }
     }
 

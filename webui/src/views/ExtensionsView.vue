@@ -8,7 +8,6 @@ import {
   NDataTable,
   NDrawer,
   NDrawerContent,
-  NInput,
   NModal,
   NPopconfirm,
   NSpace,
@@ -18,6 +17,7 @@ import {
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import ApiErrorAlert from '../components/ApiErrorAlert.vue'
+import JsonEditor from '../components/JsonEditor.vue'
 import {
   cancelExtensionPackageUpload,
   deleteExtensionRecord,
@@ -452,7 +452,7 @@ const columns = computed<DataTableColumns<ExtensionRecord>>(() => [
             <ApiErrorAlert v-if="settingsQuery.isError.value" :error="settingsQuery.error.value" />
             <ApiErrorAlert v-if="saveMutation.isError.value" :error="saveMutation.error.value" />
             <ApiErrorAlert v-if="deleteMutation.isError.value" :error="deleteMutation.error.value" />
-            <n-input v-model:value="settingsText" type="textarea" :autosize="{ minRows: 12, maxRows: 30 }" spellcheck="false" />
+            <JsonEditor v-model:value="settingsText" height="360px" :label="t('extensions.settings.title')" />
             <n-alert v-if="settingsError" type="error" :show-icon="true">{{ settingsError }}</n-alert>
             <n-space justify="end">
               <n-popconfirm :positive-text="t('common.delete')" :negative-text="t('common.cancel')" @positive-click="deleteMutation.mutate()">

@@ -488,4 +488,3 @@ $RECYCLE.BIN/
 .test-run/
 # WebUI build output
 webui/dist/
-webui/dist-embedded/

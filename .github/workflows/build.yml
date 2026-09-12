@@ -65,10 +65,6 @@ jobs:
         working-directory: webui
         run: pnpm build
 
-      - name: Build embedded webui
-        working-directory: webui
-        run: pnpm build:embedded
-
       - name: Package extension
         run: |
           set -euo pipefail

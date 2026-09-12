@@ -33,7 +33,10 @@
     <None Update="manifest.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup Condition="'$(IncludeWebUi)'=='true'">
-    <EmbeddedResource Include="..\..\webui\dist-embedded\index.html" LogicalName="Nekolla.Nekostick.Controller.WebUi.index.html" />
+    <EmbeddedResource Include="..\..\webui\dist\index.html" LogicalName="Nekolla.Nekostick.Controller.WebUi.index.html" />
+    <EmbeddedResource Include="..\..\webui\dist\*"
+                      Exclude="..\..\webui\dist\index.html"
+                      LogicalName="Nekolla.Nekostick.Controller.WebUi.assets.%(Filename)%(Extension)" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Nekolla.Nekostick.Controller.IntegrationTests" />

@@ -11,6 +11,7 @@ namespace Nekolla.Nekostick.Controller.Management;
 internal sealed class ControllerStreamingManagementHandler : IExtensionStreamingHandler
 {
     private static readonly string[] HtmlContentType = new[] { "text/html" };
+    private static readonly string[] ZeroContentLength = new[] { "0" };
     private readonly IControllerManagementDispatcher _dispatcher;
     private readonly ControllerOptions _startupOptions;
     private readonly ControllerManagementHandler _bufferedHandler;
@@ -43,13 +44,27 @@ internal sealed class ControllerStreamingManagementHandler : IExtensionStreaming
         var currentOptions = ControllerManagementDispatcherOptions.GetCurrent(_dispatcher, _startupOptions);
         if (string.Equals(request.Method, "GET", StringComparison.OrdinalIgnoreCase) &&
             currentOptions.EnableWebUi &&
-            currentOptions.HostRoutePath is { } hostRoutePath &&
-            ControllerWebUiResource.IsHostRouteRootPath(request.Path, hostRoutePath))
+            currentOptions.HostRoutePath is { } hostRoutePath)
         {
-            var resource = ControllerWebUiResource.OpenRead();
-            if (resource is not null)
+            if (ControllerWebUiResource.IsHostRouteRootPath(request.Path, hostRoutePath))
             {
-                return CreateWebUiResponse(resource);
+                // The shell addresses its assets relatively, so the document URL must end in a
+                // slash for them to resolve under the HostRoute prefix.
+                if (!request.Path.EndsWith('/'))
+                {
+                    return CreateRedirectResponse(request.Path + "/");
+                }
+
+                var resource = ControllerWebUiResource.OpenRead();
+                if (resource is not null)
+                {
+                    return CreateWebUiResponse(resource);
+                }
+            }
+            else if (ControllerWebUiResource.TryGetAssetFileName(request.Path, hostRoutePath, out var assetName) &&
+                ControllerWebUiResource.OpenAsset(assetName) is { } asset)
+            {
+                return CreateAssetResponse(asset, assetName);
             }
         }
 
@@ -150,15 +165,32 @@ internal sealed class ControllerStreamingManagementHandler : IExtensionStreaming
         return -1;
     }
 
-    private static ExtensionStreamingResponse CreateWebUiResponse(Stream resource)
+    private static ExtensionStreamingResponse CreateWebUiResponse(Stream resource) =>
+        CreateResourceResponse(resource, HtmlContentType, cacheControl: null);
+
+    private static ExtensionStreamingResponse CreateAssetResponse(Stream resource, string fileName) =>
+        CreateResourceResponse(
+            resource,
+            new[] { ControllerWebUiResource.ContentTypeFor(fileName) },
+            ControllerWebUiResource.AssetCacheControl);
+
+    private static ExtensionStreamingResponse CreateResourceResponse(
+        Stream resource,
+        string[] contentType,
+        string? cacheControl)
     {
         try
         {
-            var headers = new[]
+            var headers = new List<KeyValuePair<string, IEnumerable<string>>>(3)
             {
-                new KeyValuePair<string, IEnumerable<string>>("content-type", HtmlContentType),
-                new KeyValuePair<string, IEnumerable<string>>("content-length", new[] { resource.Length.ToString(CultureInfo.InvariantCulture) })
+                new("content-type", contentType),
+                new("content-length", new[] { resource.Length.ToString(CultureInfo.InvariantCulture) })
             };
+            if (cacheControl is not null)
+            {
+                headers.Add(new KeyValuePair<string, IEnumerable<string>>("cache-control", new[] { cacheControl }));
+            }
+
             return new ExtensionStreamingResponse(StatusCodes.Status200OK, headers, resource);
         }
         catch
@@ -166,6 +198,16 @@ internal sealed class ControllerStreamingManagementHandler : IExtensionStreaming
             resource.Dispose();
             throw;
         }
+    }
+
+    private static ExtensionStreamingResponse CreateRedirectResponse(string location)
+    {
+        var headers = new[]
+        {
+            new KeyValuePair<string, IEnumerable<string>>("location", new[] { location }),
+            new KeyValuePair<string, IEnumerable<string>>("content-length", ZeroContentLength)
+        };
+        return new ExtensionStreamingResponse(StatusCodes.Status302Found, headers, Stream.Null);
     }
 
     /// <summary>Converts a management response for the install branch, appending CORS headers.</summary>

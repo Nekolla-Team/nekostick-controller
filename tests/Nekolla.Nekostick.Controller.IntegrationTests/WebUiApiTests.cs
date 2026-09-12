@@ -182,7 +182,7 @@ public sealed class ControllerWebUiHttpTests(ControllerApiFixture fixture) : ICl
     [Fact]
     public async Task HttpJson_GetUiWhenResourceAbsentFallsThroughEvenWhenEnabled()
     {
-        ControllerWebUiResource.StreamFactory = static () => null;
+        ControllerWebUiResource.StreamFactory = static _ => null;
         try
         {
             await SetWebUiAsync(fixture, enabled: true);
@@ -192,6 +192,98 @@ public sealed class ControllerWebUiHttpTests(ControllerApiFixture fixture) : ICl
             Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
             using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
             Assert.Equal("not_found", document.RootElement.GetProperty("code").GetString());
+        }
+        finally
+        {
+            ControllerWebUiResource.ResetStreamFactory();
+        }
+    }
+
+    [Fact]
+    public async Task HttpJson_GetAssetServesEmbeddedFileWithCacheableHeaders()
+    {
+        const string assetName = "DashboardView-abc123.js";
+        const string assetBody = "export const view = 1;";
+        SetResource(Body, (assetName, assetBody));
+        try
+        {
+            await SetWebUiAsync(fixture, enabled: true);
+            using var client = fixture.CreateHttpClient(withApiKey: false);
+            using var response = await client.GetAsync($"/{assetName}", TestContext.Current.CancellationToken);
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("text/javascript", response.Content.Headers.ContentType?.MediaType);
+            Assert.Equal(
+                ControllerWebUiResource.AssetCacheControl,
+                Assert.Single(response.Headers.GetValues("cache-control")));
+            Assert.Equal(assetBody, await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            ControllerWebUiResource.ResetStreamFactory();
+        }
+    }
+
+    [Fact]
+    public async Task HttpJson_GetAssetShellAndAssetsFallThroughWhenDisabled()
+    {
+        const string assetName = "DashboardView-abc123.js";
+        SetResource(Body, (assetName, "export const view = 1;"));
+        try
+        {
+            await SetWebUiAsync(fixture, enabled: false);
+            using var client = fixture.CreateHttpClient();
+            using (var shell = await client.GetAsync("/", TestContext.Current.CancellationToken))
+            {
+                Assert.Equal(HttpStatusCode.NotFound, shell.StatusCode);
+            }
+
+            using var asset = await client.GetAsync($"/{assetName}", TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.NotFound, asset.StatusCode);
+            using var document = JsonDocument.Parse(await asset.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+            Assert.Equal("not_found", document.RootElement.GetProperty("code").GetString());
+        }
+        finally
+        {
+            ControllerWebUiResource.ResetStreamFactory();
+        }
+    }
+
+    [Theory]
+    [InlineData("/DashboardView-missing.js")]
+    [InlineData("/js/asset.js")]
+    public async Task HttpJson_GetPathWithoutEmbeddedAssetFallsThroughToTheApiPipeline(string path)
+    {
+        SetResource(Body, ("DashboardView-abc123.js", "export const view = 1;"));
+        try
+        {
+            await SetWebUiAsync(fixture, enabled: true);
+            using var client = fixture.CreateHttpClient();
+            using var response = await client.GetAsync(path, TestContext.Current.CancellationToken);
+
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+            Assert.Equal("not_found", document.RootElement.GetProperty("code").GetString());
+        }
+        finally
+        {
+            ControllerWebUiResource.ResetStreamFactory();
+        }
+    }
+
+    [Fact]
+    public async Task HttpJson_ApiRootStaysReachableWhileWebUiIsEnabled()
+    {
+        SetResource(Body, ("DashboardView-abc123.js", "export const view = 1;"));
+        try
+        {
+            await SetWebUiAsync(fixture, enabled: true);
+            using var client = fixture.CreateHttpClient();
+            using var response = await client.GetAsync("/v1", TestContext.Current.CancellationToken);
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+            Assert.True(document.RootElement.GetProperty("ok").GetBoolean());
         }
         finally
         {
@@ -228,10 +320,24 @@ public sealed class ControllerWebUiHttpTests(ControllerApiFixture fixture) : ICl
         }
     }
 
-    private static void SetResource(string body)
+    internal static void SetResource(string body, params (string FileName, string Body)[] assets)
     {
-        var bytes = Encoding.UTF8.GetBytes(body);
-        ControllerWebUiResource.StreamFactory = () => new MemoryStream(bytes, writable: false);
+        var shell = Encoding.UTF8.GetBytes(body);
+        var assetBodies = assets.ToDictionary(
+            asset => ControllerWebUiResource.AssetLogicalName(asset.FileName),
+            asset => Encoding.UTF8.GetBytes(asset.Body),
+            StringComparer.Ordinal);
+        ControllerWebUiResource.StreamFactory = logicalName =>
+        {
+            if (string.Equals(logicalName, ControllerWebUiResource.LogicalName, StringComparison.Ordinal))
+            {
+                return new MemoryStream(shell, writable: false);
+            }
+
+            return assetBodies.TryGetValue(logicalName, out var assetBody)
+                ? new MemoryStream(assetBody, writable: false)
+                : null;
+        };
     }
 
     internal static async Task SetWebUiAsync(
@@ -306,37 +412,55 @@ public sealed class ControllerWebUiHostRouteTests(ControllerApiFixture fixture, 
     }
 
     [Fact]
-    public async Task StreamingHostRoute_ServesWebUiAtRouteRootAndDispatchesManagement()
+    public async Task StreamingHostRoute_ServesWebUiShellAndAssetsThenDispatchesManagement()
     {
         const string body = "<html><body>streaming-web-ui</body></html>";
-        var bytes = Encoding.UTF8.GetBytes(body);
-        ControllerWebUiResource.StreamFactory = () => new MemoryStream(bytes, writable: false);
+        const string assetName = "DashboardView-abc123.js";
+        const string assetBody = "export const view = 1;";
+        ControllerWebUiHttpTests.SetResource(body, (assetName, assetBody));
         try
         {
             await ControllerWebUiHttpTests.SetWebUiAsync(api133Fixture, enabled: true);
             var handler = api133Fixture.Registration.StreamingHandler
                 ?? throw new InvalidOperationException("The streaming HostRoute handler is not registered.");
 
-            var uiResponse = await handler.HandleStreamingAsync(
+            // The shell resolves its assets relatively, so the bare route root must redirect to
+            // the trailing-slash form; otherwise those requests leave the HostRoute prefix.
+            var bareResponse = await handler.HandleStreamingAsync(
                 new ExtensionStreamingRequest("GET", ControllerApiFixture.HostRoutePrefix, bodyStream: Stream.Null),
+                TestContext.Current.CancellationToken);
+            using (bareResponse.BodyStream)
+            {
+                Assert.Equal(302, bareResponse.StatusCode);
+                Assert.Equal(ControllerApiFixture.HostRoutePrefix + "/", bareResponse.Headers["location"].Single());
+            }
+
+            var uiResponse = await handler.HandleStreamingAsync(
+                new ExtensionStreamingRequest("GET", ControllerApiFixture.HostRoutePrefix + "/", bodyStream: Stream.Null),
                 TestContext.Current.CancellationToken);
             using (uiResponse.BodyStream)
             using (var reader = new StreamReader(uiResponse.BodyStream, Encoding.UTF8))
             {
                 Assert.Equal(200, uiResponse.StatusCode);
                 Assert.Equal("text/html", uiResponse.Headers["content-type"].Single());
-                Assert.Equal(bytes.Length.ToString(CultureInfo.InvariantCulture), uiResponse.Headers["content-length"].Single());
+                Assert.Equal(
+                    Encoding.UTF8.GetByteCount(body).ToString(CultureInfo.InvariantCulture),
+                    uiResponse.Headers["content-length"].Single());
                 Assert.Equal(body, await reader.ReadToEndAsync(TestContext.Current.CancellationToken));
             }
 
-            var trailingUiResponse = await handler.HandleStreamingAsync(
-                new ExtensionStreamingRequest("GET", ControllerApiFixture.HostRoutePrefix + "/", bodyStream: Stream.Null),
+            var assetResponse = await handler.HandleStreamingAsync(
+                new ExtensionStreamingRequest(
+                    "GET",
+                    ControllerApiFixture.HostRoutePrefix + "/" + assetName,
+                    bodyStream: Stream.Null),
                 TestContext.Current.CancellationToken);
-            using (trailingUiResponse.BodyStream)
-            using (var trailingReader = new StreamReader(trailingUiResponse.BodyStream, Encoding.UTF8))
+            using (assetResponse.BodyStream)
+            using (var assetReader = new StreamReader(assetResponse.BodyStream, Encoding.UTF8))
             {
-                Assert.Equal(200, trailingUiResponse.StatusCode);
-                Assert.Equal(body, await trailingReader.ReadToEndAsync(TestContext.Current.CancellationToken));
+                Assert.Equal(200, assetResponse.StatusCode);
+                Assert.Equal("text/javascript; charset=utf-8", assetResponse.Headers["content-type"].Single());
+                Assert.Equal(assetBody, await assetReader.ReadToEndAsync(TestContext.Current.CancellationToken));
             }
 
             var headers = new[]
@@ -345,6 +469,21 @@ public sealed class ControllerWebUiHostRouteTests(ControllerApiFixture fixture, 
                     ControllerManagementApiContract.ApiKeyHeaderName,
                     new[] { ControllerApiFixture.ApiKey })
             };
+
+            // An unknown asset name is not a Web UI request and reaches the management pipeline.
+            var missingAssetResponse = await handler.HandleStreamingAsync(
+                new ExtensionStreamingRequest(
+                    "GET",
+                    ControllerApiFixture.HostRoutePrefix + "/DashboardView-missing.js",
+                    headers,
+                    Stream.Null),
+                TestContext.Current.CancellationToken);
+            using (missingAssetResponse.BodyStream)
+            {
+                Assert.Equal(404, missingAssetResponse.StatusCode);
+                using var missingDocument = JsonDocument.Parse(missingAssetResponse.BodyStream);
+                Assert.Equal("not_found", missingDocument.RootElement.GetProperty("code").GetString());
+            }
 
             var legacyResponse = await handler.HandleStreamingAsync(
                 new ExtensionStreamingRequest(

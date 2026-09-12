@@ -6,12 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:embedded": "vite build --mode embedded",
     "typecheck": "vue-tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
     "@tanstack/vue-query": "^5",
+    "monaco-editor": "^0.56.0",
     "naive-ui": "^2",
     "vue": "^3",
     "vue-router": "^4"
@@ -21,7 +21,6 @@
     "happy-dom": "^20.11.6",
     "typescript": "^5.9.0",
     "vite": "^8.2.2",
-    "vite-plugin-singlefile": "^2.3.3",
     "vitest": "^4.1.11",
     "vue-tsc": "^3.3.11"
   }

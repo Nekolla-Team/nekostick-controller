@@ -12,7 +12,8 @@
 | --- | --- | --- |
 | `GET` | `/v1` | 读取 API 根信息和配置概览 |
 | `GET` | `/v1/controller/state` | 读取 bootstrap 模式、listener 运行状态和 Web UI 状态 |
-| `GET` | `/`（HTTP/JSON、Unix socket）；`hostRoutePath`、`hostRoutePath/`（HostRoute） | 读取内嵌的单文件 SPA 外壳（无需 API key） |
+| `GET` | `/`（HTTP/JSON、Unix socket）；`hostRoutePath/`（HostRoute） | 读取内嵌的 SPA 外壳（无需 API key） |
+| `GET` | `/<file>`（HTTP/JSON、Unix socket）；`hostRoutePath/<file>`（HostRoute） | 读取内嵌的 Web UI 静态资源（无需 API key） |
 | `GET`, `PATCH` | `/v1/global-settings` | 读取或更新全局设置 |
 | `GET`, `POST` | `/v1/routes` | 列出或创建 route |
 | `GET`, `PATCH`, `DELETE` | `/v1/routes/{id}` | 读取、更新或删除 route |
@@ -86,11 +87,13 @@ Unix socket 承载 HTTP/1.1，仅在非 Windows 平台可用。客户端连接�
 
 ### 2.5 Web UI
 
-Web UI 在各传输的 controller root 提供内嵌的单文件 SPA 外壳：
+Web UI 在各传输的 controller root 提供内嵌的 SPA 外壳，并在同一 root 提供它的静态资源：
 
-- HTTP/JSON 和 Unix socket：仅精确的 `GET /` 提供页面；这是 listener 的根路径。
-- HostRoute：`GET <hostRoutePath>` 或 `GET <hostRoutePath>/` 提供页面；仅 Host API `>=1.3.2` 且成功注册 streaming handler 时启用。`<hostRoutePath>/v1/...` 等更深路径仍然进入管理 API。
-- gRPC 不提供 Web UI 页面。
+- HTTP/JSON 和 Unix socket：仅精确的 `GET /` 提供外壳页面；`GET /<file>` 提供同名内嵌资源。
+- HostRoute：`GET <hostRoutePath>/` 提供外壳页面，`GET <hostRoutePath>/<file>` 提供资源；仅 Host API `>=1.3.2` 且成功注册 streaming handler 时启用。不带尾斜杠的 `GET <hostRoutePath>` 返回 `302` 重定向到 `<hostRoutePath>/`，否则相对资源路径会落到 root 之外。`<hostRoutePath>/v1/...` 等更深路径仍然进入管理 API。
+- gRPC 不提供 Web UI 页面或资源。
+
+`<file>` 只接受单层、含扩展名、由 ASCII 字母数字与 `.` `-` `_` 组成的名字（最长 128 字符）。命中内嵌资源时返回 `200`，`Content-Type` 按扩展名决定（`.js`、`.css`、`.json`、`.svg` 与 woff/woff2/ttf 字体），并带 `Cache-Control: public, max-age=31536000, immutable`（构建产物文件名含内容哈希）；未命中或形状不合法时 request 继续进入普通管理 API admission，因此 `GET /v1` 等路径不会被静态资源遮蔽。
 
 页面响应的 `Content-Type` 为 `text/html`，不需要 `x-nekostick-controller-key`。仅接受 `GET`；其他 method 会继续进入普通管理 API admission。页面路径不添加 CORS response headers。
 
@@ -102,7 +105,7 @@ Web UI 由 controller extension settings 中的 `enableWebUi` 控制。该设置
 }
 ```
 
-只有设置启用且程序集包含 `webui/dist-embedded/index.html` 时才会提供页面；禁用、资源不存在或不满足 HostRoute streaming 条件时，request 会继续现有管线并返回普通的 `404`/认证响应。Host API `<1.3.2` 的 buffered HostRoute 不提供页面，root 请求保持普通 `404` 语义。
+只有设置启用且程序集包含 Web UI 构建产物（`webui/dist`，以 `IncludeWebUi=true` 打包）时才会提供页面与静态资源；禁用、资源不存在或不满足 HostRoute streaming 条件时，request 会继续现有管线并返回普通的 `404`/认证响应。Host API `<1.3.2` 的 buffered HostRoute 不提供页面，root 请求保持普通 `404` 语义。
 
 ## 3. 认证与请求边界
 
@@ -510,7 +513,7 @@ curl --fail-with-body \
 
 ### 控制器状态与设置热重载
 
-`GET /v1/controller/state` 返回当前 controller runtime state。它是只读、未版本化的状态读取：请求 body 必须为空，不接受 `If-Match`，成功响应不带 ETag 且 envelope `version` 固定为 `null`。响应包含 bootstrap 模式、listener 的 enablement/running 状态、始终存在的 `webUi` 对象，以及 Host API `>=1.3.3` 时可用的非敏感 `host` 快照；不包含设置值、端口、路径、API key 或其他 secret。`webUi.embedded` 表示程序集是否包含单文件资源，`webUi.enabled` 表示当前 `enableWebUi` 设置为 true 且资源存在。每次读取都会对照 Host 配置核实 HostRoute listener 状态；Host 配置暂时不可读时返回 `503 unavailable`。
+`GET /v1/controller/state` 返回当前 controller runtime state。它是只读、未版本化的状态读取：请求 body 必须为空，不接受 `If-Match`，成功响应不带 ETag 且 envelope `version` 固定为 `null`。响应包含 bootstrap 模式、listener 的 enablement/running 状态、始终存在的 `webUi` 对象，以及 Host API `>=1.3.3` 时可用的非敏感 `host` 快照；不包含设置值、端口、路径、API key 或其他 secret。`webUi.embedded` 表示程序集是否包含内嵌的 Web UI 构建产物，`webUi.enabled` 表示当前 `enableWebUi` 设置为 true 且资源存在。每次读取都会对照 Host 配置核实 HostRoute listener 状态；Host 配置暂时不可读时返回 `503 unavailable`。
 
 
 ```json

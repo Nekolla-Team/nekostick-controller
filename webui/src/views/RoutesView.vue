@@ -28,6 +28,7 @@ import {
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import ApiErrorAlert from '../components/ApiErrorAlert.vue'
+import JsonEditor from '../components/JsonEditor.vue'
 import { createRoute, deleteRoute, listRoutes, patchRoute, routesPath } from '../api/resources/routes'
 import type {
   ForwardingMode,
@@ -528,7 +529,7 @@ const columns = computed<DataTableColumns<RouteDto>>(() => [
                 </n-space>
               </n-form-item>
               <n-form-item :label="t('routes.form.advanced.metadataJson')">
-                <n-input v-model:value="form.metadataJson" type="textarea" :autosize="{ minRows: 3, maxRows: 8 }" />
+                <JsonEditor v-model:value="form.metadataJson" height="180px" :label="t('routes.form.advanced.metadataJson')" />
                 <p class="field-hint">{{ t('routes.hints.metadataJson') }}</p>
               </n-form-item>
               <n-grid :cols="2" :x-gap="16">
