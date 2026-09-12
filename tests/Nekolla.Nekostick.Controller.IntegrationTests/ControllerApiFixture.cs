@@ -264,7 +264,9 @@ public class ControllerApiFixture : IAsyncLifetime
 
         var body = jsonBody is null ? ReadOnlyMemory<byte>.Empty : Encoding.UTF8.GetBytes(jsonBody).AsMemory();
         var request = new ExtensionHandlerRequest(method, path, headers, body, isHttps: false);
-        return await handler.HandleAsync(request, TestContext.Current.CancellationToken);
+        // The Host invokes the registered handler inside its route callback scope; reproduce that
+        // here so capability behavior that depends on the callback context stays observable.
+        return await Host.InRouteCallbackAsync(() => handler.HandleAsync(request, TestContext.Current.CancellationToken));
     }
 
     private static int ReserveDualStackLoopbackPort(int excludedPort = 0)

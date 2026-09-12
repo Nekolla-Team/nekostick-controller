@@ -27,6 +27,8 @@
 | `GET` | `/v1/extensions` | 列出 extension records |
 | `GET` | `/v1/extensions/{id}` | 读取 extension record |
 | `GET`, `PUT`, `DELETE` | `/v1/extensions/{id}/settings` | 读取、替换或删除 extension settings |
+| `POST` | `/v1/extensions/{id}/enable`、`/v1/extensions/{id}/disable`、`/v1/extensions/{id}/reload` | 启用、禁用或重载一个 extension record |
+| `DELETE` | `/v1/extensions/{id}/record` | 级联删除一个 extension record |
 | `POST` | `/v1/extensions/refresh` | 重新扫描扩展目录并返回摘要（含 `skipped`，Host API >=1.3.4） |
 | `POST` | `/v1/extensions/install` | 流式上传扩展 zip 包并安装/整体替换扩展目录（HostRoute 需 Host API >=1.3.2） |
 
@@ -411,6 +413,15 @@ extension record 是只读信息：
 
 `loadState` 是 `Discovered`、`Loaded`、`Stopped`、`Failed` 或 `Unloading`。
 `contentHash` 是最近一次 Host 扫描记录的扩展目录 SHA-256 摘要；尚未记录或 Host API 低于 `1.3.3` 时为 `null`。
+
+`POST /v1/extensions/{id}/enable`、`POST /v1/extensions/{id}/disable`、`POST /v1/extensions/{id}/reload` 和 `DELETE /v1/extensions/{id}/record` 管理单个 extension record：启用、禁用、重载，以及级联删除记录（只删除记录，不删除磁盘上的扩展目录）。四者都要求请求 body 为空，不接受 `If-Match`，成功响应是无版本 envelope。未知 `{id}` 返回 `404 not_found`；reload 的目标 record 不处于 `Loaded` 时返回 `400 invalid_request`；Host 未提供管理能力时返回 `501 unsupported`。
+
+reload 成功的 `data` 是 `{"outcome": "..."}`：
+
+- 经 controller 自己的 listener（HTTP/JSON、Unix socket、gRPC）提交时为 `reloaded`，表示 Host 已完成本次 generation 替换；
+- 经 HostRoute 提交时为 `scheduled`，表示 Host 只把这次 reload 排入 deferred publication。Host 在自己的 extension route callback 中禁止同步 reload，调度是该上下文唯一受支持的入口；调度是 best-effort，既不等待替换完成，也不回报后续失败，因此该上下文下无法调度时返回 `501 unsupported`。
+
+enable、disable 和 record 三者在任何 transport 上的语义一致（Host 会把 route callback 中的 publish 推迟到 callback 返回之后）。
 
 `POST /v1/extensions/refresh` 要求 Host 重新扫描扩展目录，请求 body 必须为空，成功响应是无版本 envelope（不带 ETag）：
 

@@ -22,6 +22,10 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
     private ConfigurationError? _nextApplyFailure;
     private ConfigurationError? _nextManagementFailure;
     private readonly HashSet<string> _runningExtensions = new(StringComparer.Ordinal);
+    private readonly AsyncLocal<bool> _inRouteCallback = new();
+    private readonly ConcurrentQueue<string> _scheduledReloads = new();
+    private readonly ConcurrentQueue<string> _synchronousReloads = new();
+    private bool _refuseReloadSchedule;
 
     public FakeHostBridge(HostConfigurationSnapshot initialSnapshot, HostApiVersion? apiVersion = null)
     {
@@ -163,6 +167,63 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
             else _runningExtensions.Remove(extensionId);
         }
     }
+
+    /// <summary>Gets the extension identifiers passed to the callback-safe scheduling entry point.</summary>
+    public IReadOnlyCollection<string> ScheduledReloads => _scheduledReloads.ToArray();
+
+    /// <summary>Gets the extension identifiers passed to the synchronous reload operation.</summary>
+    public IReadOnlyCollection<string> SynchronousReloads => _synchronousReloads.ToArray();
+
+    /// <summary>Clears the recorded reload observations so one test asserts only its own calls.</summary>
+    public void ClearReloadObservations()
+    {
+        _scheduledReloads.Clear();
+        _synchronousReloads.Clear();
+    }
+
+    /// <summary>Sets whether the callback-safe reload scheduling entry point declines, as on a read-only node.</summary>
+    public void SetReloadScheduleRefused(bool refused)
+    {
+        lock (_sync)
+        {
+            _refuseReloadSchedule = refused;
+        }
+    }
+
+    /// <summary>
+    /// Runs one route handler invocation inside the callback scope the Host establishes for it.
+    /// </summary>
+    /// <remarks>
+    /// The real Host vetoes the synchronous reload from these callbacks and offers scheduling
+    /// instead, so the fake reproduces that veto to keep the controller honest on this transport.
+    /// </remarks>
+    public async ValueTask<T> InRouteCallbackAsync<T>(Func<ValueTask<T>> invoke)
+    {
+        var prior = _inRouteCallback.Value;
+        _inRouteCallback.Value = true;
+        try
+        {
+            return await invoke().ConfigureAwait(false);
+        }
+        finally
+        {
+            _inRouteCallback.Value = prior;
+        }
+    }
+
+    private bool InRouteCallback => _inRouteCallback.Value;
+
+    private bool ReadReloadScheduleRefused()
+    {
+        lock (_sync)
+        {
+            return _refuseReloadSchedule;
+        }
+    }
+
+    private void RecordScheduledReload(string extensionId) => _scheduledReloads.Enqueue(extensionId);
+
+    private void RecordSynchronousReload(string extensionId) => _synchronousReloads.Enqueue(extensionId);
 
     public ConfigurationWriteResult ReplaceSnapshot(long expectedVersion, ConfigurationChangeSet changes)
     {
@@ -601,6 +662,13 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
         public ValueTask<ConfigurationWriteResult> ReloadAsync(string extensionId, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            owner.RecordSynchronousReload(extensionId);
+            if (owner.InRouteCallback)
+            {
+                // The real Host vetoes the synchronous reload inside a route callback.
+                return ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.Unsupported)));
+            }
+
             if (owner.ConsumeManagementFailure() is { } failure) return ValueTask.FromResult(ConfigurationWriteResult.Failure(failure));
             var entry = owner.ReadManagementEntries().FirstOrDefault(candidate => candidate.ExtensionId == extensionId);
             if (entry is null) return ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.NotFound)));
@@ -609,7 +677,12 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
             return ValueTask.FromResult(ConfigurationWriteResult.Success(owner.ReadSnapshot().Version));
         }
 
-        public bool ReloadSoon(string extensionId) => true;
+        public bool ReloadSoon(string extensionId)
+        {
+            if (owner.ReadReloadScheduleRefused()) return false;
+            owner.RecordScheduledReload(extensionId);
+            return true;
+        }
 
         public ValueTask<ConfigurationWriteResult> DeleteRecordAsync(string extensionId, CancellationToken cancellationToken)
         {

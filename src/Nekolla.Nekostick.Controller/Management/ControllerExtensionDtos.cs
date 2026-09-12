@@ -60,6 +60,13 @@ public sealed class ControllerExtensionInstallResultDto
     [JsonPropertyName("replaced")] public bool Replaced { get; init; }
 }
 
+/// <summary>Read representation of an extension reload request outcome.</summary>
+public sealed class ControllerExtensionReloadReadDto
+{
+    /// <summary>Outcome of the requested reload: <c>reloaded</c> or <c>scheduled</c>.</summary>
+    [JsonPropertyName("outcome")] public string Outcome { get; init; } = string.Empty;
+}
+
 /// <summary>Read representation of extension settings.</summary>
 public sealed class ControllerExtensionSettingsReadDto
 {

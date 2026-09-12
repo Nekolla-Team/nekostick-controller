@@ -184,6 +184,113 @@ public sealed class ExtensionsApiTests(ControllerApiFixture fixture) : IClassFix
     }
 
     [Fact]
+    public async Task ExtensionReload_OnControllerTransport_ReportsCompletedReload()
+    {
+        using var client = fixture.CreateHttpClient();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        fixture.Host.ClearReloadObservations();
+
+        using var response = await client.PostAsync(
+            $"/v1/extensions/{ControllerApiFixture.TestExtensionId}/reload",
+            content: null,
+            cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        AssertReloadOutcome(document.RootElement, "reloaded");
+        Assert.Equal(new[] { ControllerApiFixture.TestExtensionId }, fixture.Host.SynchronousReloads);
+        Assert.Empty(fixture.Host.ScheduledReloads);
+    }
+
+    [Fact]
+    public async Task ExtensionReload_OnHostRoute_SchedulesInsteadOfCallingTheVetoedOperation()
+    {
+        fixture.Host.ClearReloadObservations();
+
+        var response = await fixture.InvokeHostRouteAsync(
+            "POST",
+            $"{ControllerApiFixture.HostRoutePrefix}/v1/extensions/{ControllerApiFixture.TestExtensionId}/reload");
+
+        Assert.Equal(200, response.StatusCode);
+        using var document = JsonDocument.Parse(response.Body.ToArray());
+        AssertReloadOutcome(document.RootElement, "scheduled");
+        Assert.Equal(new[] { ControllerApiFixture.TestExtensionId }, fixture.Host.ScheduledReloads);
+        Assert.Empty(fixture.Host.SynchronousReloads);
+    }
+
+    [Fact]
+    public async Task ExtensionReload_OnHostRouteForUnknownExtension_ReturnsNotFound()
+    {
+        fixture.Host.ClearReloadObservations();
+
+        var response = await fixture.InvokeHostRouteAsync(
+            "POST",
+            $"{ControllerApiFixture.HostRoutePrefix}/v1/extensions/nekolla.nekostick.ghost-reload/reload");
+
+        Assert.Equal(404, response.StatusCode);
+        using var document = JsonDocument.Parse(response.Body.ToArray());
+        AssertErrorEnvelope(document.RootElement, "not_found");
+        Assert.Empty(fixture.Host.ScheduledReloads);
+    }
+
+    [Fact]
+    public async Task ExtensionReload_OnHostRouteForDisabledExtension_ReturnsInvalidRequest()
+    {
+        using var client = fixture.CreateHttpClient();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        fixture.Host.ClearReloadObservations();
+        using (var disabled = await client.PostAsync(
+            $"/v1/extensions/{ControllerApiFixture.TestExtensionId}/disable",
+            content: null,
+            cancellationToken))
+        {
+            Assert.Equal(HttpStatusCode.OK, disabled.StatusCode);
+        }
+
+        try
+        {
+            var response = await fixture.InvokeHostRouteAsync(
+                "POST",
+                $"{ControllerApiFixture.HostRoutePrefix}/v1/extensions/{ControllerApiFixture.TestExtensionId}/reload");
+
+            Assert.Equal(400, response.StatusCode);
+            using var document = JsonDocument.Parse(response.Body.ToArray());
+            AssertErrorEnvelope(document.RootElement, "invalid_request");
+            Assert.Empty(fixture.Host.ScheduledReloads);
+        }
+        finally
+        {
+            using var enabled = await client.PostAsync(
+                $"/v1/extensions/{ControllerApiFixture.TestExtensionId}/enable",
+                content: null,
+                cancellationToken);
+            Assert.Equal(HttpStatusCode.OK, enabled.StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task ExtensionReload_OnHostRouteWhenSchedulingIsRefused_ReturnsUnsupported()
+    {
+        fixture.Host.ClearReloadObservations();
+        fixture.Host.SetReloadScheduleRefused(true);
+        try
+        {
+            var response = await fixture.InvokeHostRouteAsync(
+                "POST",
+                $"{ControllerApiFixture.HostRoutePrefix}/v1/extensions/{ControllerApiFixture.TestExtensionId}/reload");
+
+            Assert.Equal(501, response.StatusCode);
+            using var document = JsonDocument.Parse(response.Body.ToArray());
+            AssertErrorEnvelope(document.RootElement, "unsupported");
+            Assert.Empty(fixture.Host.SynchronousReloads);
+        }
+        finally
+        {
+            fixture.Host.SetReloadScheduleRefused(false);
+        }
+    }
+
+    [Fact]
     public async Task ExtensionLifecycle_UnknownId_ReturnsNotFound()
     {
         using var client = fixture.CreateHttpClient();
@@ -244,6 +351,12 @@ public sealed class ExtensionsApiTests(ControllerApiFixture fixture) : IClassFix
         fixture.Host.FailNextManagement(ConfigurationErrorCode.StorageUnavailable);
         using var refreshed = await client.PostAsync("/v1/extensions/refresh", content: null, cancellationToken);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, refreshed.StatusCode);
+    }
+
+    private static void AssertReloadOutcome(JsonElement envelope, string outcome)
+    {
+        AssertSuccessfulEnvelope(envelope);
+        Assert.Equal(outcome, envelope.GetProperty("data").GetProperty("outcome").GetString());
     }
 
     private static void AssertSettings(JsonElement envelope, string theme)

@@ -79,14 +79,41 @@ internal sealed partial class ControllerManagementCore
         if (method != expectedMethod) return ControllerManagementResponseBuilder.MethodNotAllowed;
         if (!RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
         if (ExtensionManagement is not { } management) return ControllerManagementResponseBuilder.Unsupported;
+        if (action == "reload") return await ReloadExtensionAsync(request, management, extensionId, cancellationToken).ConfigureAwait(false);
         var write = action switch
         {
             "enable" => await management.EnableAsync(extensionId, cancellationToken).ConfigureAwait(false),
             "disable" => await management.DisableAsync(extensionId, cancellationToken).ConfigureAwait(false),
-            "reload" => await management.ReloadAsync(extensionId, cancellationToken).ConfigureAwait(false),
             _ => await management.DeleteRecordAsync(extensionId, cancellationToken).ConfigureAwait(false),
         };
         return write.IsSuccess ? ControllerManagementResponseBuilder.SuccessUnversioned(null) : ControllerManagementResponseBuilder.FromConfigurationErrors(write.Errors);
+    }
+
+    private static async ValueTask<ControllerManagementResponse> ReloadExtensionAsync(
+        ControllerManagementRequest request,
+        IExtensionManagementApi management,
+        string extensionId,
+        CancellationToken cancellationToken)
+    {
+        if (request.Transport != ControllerTransport.HostRoute)
+        {
+            var write = await management.ReloadAsync(extensionId, cancellationToken).ConfigureAwait(false);
+            return write.IsSuccess
+                ? ControllerManagementResponseBuilder.SuccessUnversioned(new ControllerExtensionReloadReadDto { Outcome = "reloaded" })
+                : ControllerManagementResponseBuilder.FromConfigurationErrors(write.Errors);
+        }
+
+        // The Host invokes this transport inside its own extension route callback, where the
+        // synchronous reload is vetoed and scheduling is the only supported entry point. A
+        // scheduled reload never awaits generation replacement, so the outcome says so.
+        var read = await management.ListAsync(cancellationToken).ConfigureAwait(false);
+        if (!read.IsSuccess) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
+        var entry = read.Value.FirstOrDefault(candidate => string.Equals(candidate.ExtensionId, extensionId, StringComparison.Ordinal));
+        if (entry is null) return ControllerManagementResponseBuilder.NotFound;
+        if (entry.LoadState != ExtensionLoadState.Loaded) return ControllerManagementResponseBuilder.InvalidRequest;
+        return management.ReloadSoon(extensionId)
+            ? ControllerManagementResponseBuilder.SuccessUnversioned(new ControllerExtensionReloadReadDto { Outcome = "scheduled" })
+            : ControllerManagementResponseBuilder.Unsupported;
     }
 
     private static bool TryGetExtensionActionPath(string path, out string extensionId, out string action)
