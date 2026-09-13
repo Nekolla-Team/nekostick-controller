@@ -431,3 +431,98 @@ public sealed class ExtensionInstallApi133Tests(ControllerApi133Fixture fixture)
         }
     }
 }
+
+/// <summary>Path resolution for hosts that load assemblies through per-content shadow symlinks.</summary>
+public sealed class ExtensionInstallerPathResolutionTests
+{
+    [Fact]
+    public void ResolveSymbolicAncestors_WhenDirectoryIsReal_ReturnsTheSamePath()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var extensionDirectory = Directory.CreateDirectory(Path.Combine(root, "nekolla.nekostick.controller"));
+
+            var resolved = ControllerExtensionInstaller.ResolveSymbolicAncestors(extensionDirectory.FullName);
+
+            Assert.Equal(extensionDirectory.FullName, resolved);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResolveSymbolicAncestors_WhenDirectoryIsShadowLink_ReturnsTheRealTarget()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var extensionsRoot = Directory.CreateDirectory(Path.Combine(root, "extensions"));
+            var extensionDirectory = Directory.CreateDirectory(Path.Combine(extensionsRoot.FullName, "nekolla.nekostick.controller"));
+            var shadowRoot = Directory.CreateDirectory(Path.Combine(root, "shadow"));
+            var shadowLink = Path.Combine(shadowRoot.FullName, "nekolla.nekostick.controller-sha256abc");
+            Directory.CreateSymbolicLink(shadowLink, extensionDirectory.FullName);
+
+            var resolved = ControllerExtensionInstaller.ResolveSymbolicAncestors(shadowLink);
+
+            Assert.Equal(extensionDirectory.FullName, resolved);
+            Assert.Equal(extensionsRoot.FullName, Path.GetDirectoryName(resolved));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResolveSymbolicAncestors_WhenEntryLiesBelowShadowLink_ResolvesTheLinkAncestor()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var extensionDirectory = Directory.CreateDirectory(Path.Combine(root, "extensions", "nekolla.nekostick.controller"));
+            var payloadDirectory = Directory.CreateDirectory(Path.Combine(extensionDirectory.FullName, "payload-1.0"));
+            var shadowLink = Path.Combine(root, "shadow", "nekolla.nekostick.controller-sha256abc");
+            Directory.CreateDirectory(Path.GetDirectoryName(shadowLink)!);
+            Directory.CreateSymbolicLink(shadowLink, extensionDirectory.FullName);
+
+            var resolved = ControllerExtensionInstaller.ResolveSymbolicAncestors(
+                Path.Combine(shadowLink, "payload-1.0"));
+
+            Assert.Equal(payloadDirectory.FullName, resolved);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResolveSymbolicAncestors_WhenShadowLinkDangles_ReturnsNull()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var shadowLink = Path.Combine(root, "shadow", "nekolla.nekostick.controller-sha256abc");
+            Directory.CreateDirectory(Path.GetDirectoryName(shadowLink)!);
+            Directory.CreateSymbolicLink(shadowLink, Path.Combine(root, "extensions", "nekolla.nekostick.controller"));
+
+            Assert.Null(ControllerExtensionInstaller.ResolveSymbolicAncestors(shadowLink));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static string CreateTempDirectory()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "nekostick-path-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(path);
+        // /tmp and /var are symlinked on some platforms; work from the canonical path so the
+        // expectations match the fully resolved results.
+        return ControllerExtensionInstaller.ResolveSymbolicAncestors(path)!;
+    }
+}

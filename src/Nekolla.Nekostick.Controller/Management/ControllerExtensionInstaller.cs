@@ -186,6 +186,22 @@ internal static class ControllerExtensionInstaller
         }
 
         var extensionDirectory = Path.GetDirectoryName(location);
+        if (extensionDirectory is not null)
+        {
+            // The host may load the assembly through a per-content shadow symlink (see the
+            // upstream assembly image cache workaround); deriving the install root from the
+            // unresolved shadow path would target the shadow temp root instead of the real
+            // extensions root.
+            var resolvedDirectory = ResolveSymbolicAncestors(extensionDirectory);
+            if (resolvedDirectory is null)
+            {
+                WriteLog(ExtensionLogLevel.Warning, $"Extension install failed: the controller extension directory '{extensionDirectory}' has an unresolvable symbolic link ancestor, so the real extensions root cannot be derived.");
+                return null;
+            }
+
+            extensionDirectory = resolvedDirectory;
+        }
+
         var root = extensionDirectory is null ? null : Path.GetDirectoryName(extensionDirectory);
         if (root is null)
         {
@@ -193,6 +209,54 @@ internal static class ControllerExtensionInstaller
         }
 
         return root;
+    }
+
+    /// <summary>
+    /// Resolves symbolic link ancestors so an assembly loaded through a host-managed shadow link
+    /// still yields the real path. Returns <see langword="null" /> when a symbolic ancestor cannot
+    /// be resolved, since deriving an install root from an unresolved shadow path would target
+    /// the shadow temp root instead.
+    /// </summary>
+    /// <param name="path">The directory whose symbolic ancestors should be resolved.</param>
+    internal static string? ResolveSymbolicAncestors(string path)
+    {
+        var current = Path.GetFullPath(path);
+        for (var guard = 0; guard < 8; guard++)
+        {
+            var suffix = new List<string>();
+            var directory = new DirectoryInfo(current);
+            while (directory is not null && directory.LinkTarget is null)
+            {
+                suffix.Add(directory.Name);
+                directory = directory.Parent;
+            }
+
+            if (directory is null)
+            {
+                return current;
+            }
+
+            // A dangling link still reports its target path, so existence is the real check.
+            if (directory.ResolveLinkTarget(returnFinalTarget: true) is not { Exists: true } target)
+            {
+                return null;
+            }
+
+            var rebuilt = target.FullName;
+            for (var index = suffix.Count - 1; index >= 0; index--)
+            {
+                rebuilt = Path.Combine(rebuilt, suffix[index]);
+            }
+
+            if (string.Equals(rebuilt, current, StringComparison.Ordinal))
+            {
+                return current;
+            }
+
+            current = rebuilt;
+        }
+
+        return null;
     }
 
     private static async ValueTask<bool> TryCopyBoundedAsync(Stream package, string stagingPath, CancellationToken cancellationToken)
