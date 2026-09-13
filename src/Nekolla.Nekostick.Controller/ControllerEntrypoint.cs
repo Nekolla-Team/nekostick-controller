@@ -22,6 +22,8 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
     private bool _startupFailed;
     private bool _successfullyStopped;
     private bool _bootstrapSecretEmitted;
+    private IExtensionStartContext? _deferredStartContext;
+    private IExtensionHostBridge13? _deferredStartHost;
     private int _disposed;
 
     /// <summary>Creates a controller that hydrates options from the host configuration snapshot.</summary>
@@ -137,15 +139,29 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
             }
 
             var handlerFactory = _handlerFactory ?? new ControllerManagementHandlerFactory();
+            // The host marks every staged start as reloading, including the very first one, so a
+            // replacement start must only defer when a previous generation is actually still
+            // running and holding the listeners and routes this generation is about to acquire;
+            // acquisition then completes from OnPreviousStoppedAsync.
+            var deferResourceAcquisition = context.Reloading &&
+                await IsOwnGenerationRunningAsync(context, cancellationToken).ConfigureAwait(false);
             try
             {
+                // Acquisition completes once the host reports the previous generation stopped via
+                // OnPreviousStoppedAsync.
                 await runtime.StartAsync(
                     context.Registration,
                     handlerFactory,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    deferResourceAcquisition).ConfigureAwait(false);
                 if (runtime.IsEphemeralBootstrap && runtime.BootstrapRouteProvisioned)
                 {
                     EmitBootstrapSecret(host13);
+                }
+                if (runtime.HasDeferredResourceAcquisition)
+                {
+                    _deferredStartContext = context;
+                    _deferredStartHost = host13;
                 }
                 context.Host.Status.Report(new ExtensionStatus(ExtensionStatusKind.Healthy, "ready"));
             }
@@ -315,6 +331,48 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
         return host13;
     }
 
+    /// <summary>Reports whether a previous generation of this extension is still serving.</summary>
+    private static async ValueTask<bool> IsOwnGenerationRunningAsync(
+        IExtensionStartContext context,
+        CancellationToken cancellationToken)
+    {
+        ConfigurationReadResult<ImmutableArray<ExtensionManagementEntry>> read;
+        if (context.Host is not IExtensionHostBridge13 host13 || host13.Management is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            read = await host13.Management.ListAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            // Without host visibility, prefer availability: acquire immediately and let a real
+            // conflict fail loudly rather than waiting for a callback that may never come.
+            return false;
+        }
+
+        if (!read.IsSuccess || read.Value.IsDefault)
+        {
+            return false;
+        }
+
+        foreach (var entry in read.Value)
+        {
+            if (string.Equals(entry.ExtensionId, ControllerOptions.ExtensionId, StringComparison.Ordinal))
+            {
+                return entry.IsRunning;
+            }
+        }
+
+        return false;
+    }
+
     private static async ValueTask<ControllerOptions?> HydrateOptionsAsync(
         IExtensionStartContext context,
         CancellationToken cancellationToken)
@@ -448,12 +506,51 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
         }
     }
 
-    /// <summary>Honors replacement lifecycle cancellation without owning any transport.</summary>
+    /// <summary>Completes deferred listener and route acquisition after the previous generation stops.</summary>
     /// <param name="cancellationToken">The host lifecycle cancellation token.</param>
-    public ValueTask OnPreviousStoppedAsync(CancellationToken cancellationToken)
+    public async ValueTask OnPreviousStoppedAsync(CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.CompletedTask;
+        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var context = _deferredStartContext;
+            var host13 = _deferredStartHost;
+            if (context is null || host13 is null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return;
+            }
+
+            _deferredStartContext = null;
+            _deferredStartHost = null;
+            var runtime = _runtime;
+            if (runtime is null || !runtime.HasDeferredResourceAcquisition)
+            {
+                return;
+            }
+
+            try
+            {
+                await runtime.AcquireDeferredResourcesAsync(cancellationToken).ConfigureAwait(false);
+                if (runtime.IsEphemeralBootstrap && runtime.BootstrapRouteProvisioned)
+                {
+                    EmitBootstrapSecret(host13);
+                }
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // The generation is already published; surface the acquisition failure honestly
+                // instead of leaving the extension reporting a ready state it cannot serve.
+                context.Host.Status.Report(new ExtensionStatus(
+                    ExtensionStatusKind.Degraded,
+                    "startup.deferred_acquisition_failed"));
+                throw;
+            }
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
     }
 
     /// <summary>Releases the lifecycle gate after a terminal successful stop.</summary>

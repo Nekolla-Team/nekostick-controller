@@ -269,7 +269,7 @@ public class ControllerApiFixture : IAsyncLifetime
         return await Host.InRouteCallbackAsync(() => handler.HandleAsync(request, TestContext.Current.CancellationToken));
     }
 
-    private static int ReserveDualStackLoopbackPort(int excludedPort = 0)
+    internal static int ReserveDualStackLoopbackPort(int excludedPort = 0)
     {
         // The HTTP and gRPC adapters bind the same port on both IPv4 and IPv6 loopback.
         for (var attempt = 0; attempt < 32; attempt++)

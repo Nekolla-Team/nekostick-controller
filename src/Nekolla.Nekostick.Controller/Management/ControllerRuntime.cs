@@ -17,6 +17,7 @@ internal sealed class ControllerRuntime
     private bool _bootstrapRouteCleanupPending;
     private bool _bootstrapRouteProvisioned;
     private bool _hostRouteRunning;
+    private bool _resourceAcquisitionPending;
     private readonly List<IControllerTransportAdapter> _startedAdapters = new();
     private IExtensionRegistration? _registration;
     private string? _handlerId;
@@ -60,6 +61,9 @@ internal sealed class ControllerRuntime
 
     /// <summary>Gets whether a HostRoute handler is registered and owned by this runtime.</summary>
     internal bool HasRegisteredHandler => _registration is not null && _handlerId is not null;
+
+    /// <summary>Gets whether a replacement start deferred listener and route acquisition.</summary>
+    internal bool HasDeferredResourceAcquisition => _resourceAcquisitionPending;
 
     /// <summary>Gets whether listeners or dispatcher admission still require cleanup.</summary>
     internal bool HasActiveResources =>
@@ -188,7 +192,8 @@ internal sealed class ControllerRuntime
     internal async ValueTask StartAsync(
         IExtensionRegistration? registration,
         IControllerManagementHandlerFactory? handlerFactory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool deferResourceAcquisition = false)
     {
         if (Volatile.Read(ref _state) == 1)
         {
@@ -205,69 +210,17 @@ internal sealed class ControllerRuntime
             cancellationToken.ThrowIfCancellationRequested();
             await Dispatcher.StartAsync(cancellationToken).ConfigureAwait(false);
 
-            foreach (var adapter in _transportAdapters)
+            // On a replacement start the previous generation still holds the listeners and owns the
+            // provisioned routes until its stop completes, so acquiring them here would collide with
+            // it; the entrypoint completes acquisition from OnPreviousStoppedAsync instead.
+            if (!deferResourceAcquisition)
             {
-                if (!_options.IsTransportEnabled(adapter.Transport))
-                {
-                    continue;
-                }
-
-                try
-                {
-                    await adapter.StartAsync(Dispatcher, _options, cancellationToken)
-                        .ConfigureAwait(false);
-                    if (!adapter.IsStarted)
-                    {
-                        throw new InvalidOperationException("The enabled transport did not start.");
-                    }
-
-                    cancellationToken.ThrowIfCancellationRequested();
-                }
-                finally
-                {
-                    if (adapter.IsStarted && !_startedAdapters.Contains(adapter))
-                    {
-                        _startedAdapters.Add(adapter);
-                    }
-                }
+                await StartEnabledAdaptersAsync(cancellationToken).ConfigureAwait(false);
             }
 
             if (_options.EnableHostRoute)
             {
-                if (HasRegisteredHandler)
-                {
-                    if (IsEphemeralBootstrap)
-                    {
-                        if (!_staleBootstrapRoutesCleaned)
-                        {
-                            await Dispatcher.CleanupStaleBootstrapRoutesAsync(
-                                _handlerId!,
-                                cancellationToken).ConfigureAwait(false);
-                            _staleBootstrapRoutesCleaned = true;
-                        }
-
-                        _bootstrapRouteCleanupPending = true;
-                        var provisionedIdentity = await Dispatcher.ProvisionBootstrapRouteAsync(
-                            _handlerId!,
-                            cancellationToken).ConfigureAwait(false);
-                        if (provisionedIdentity is not { } identity)
-                        {
-                            throw new InvalidOperationException("The bootstrap route provisioning identity is unavailable.");
-                        }
-
-                        _bootstrapRouteIdentity = identity;
-                        _bootstrapRouteProvisioned = true;
-                        _hostRouteRunning = true;
-
-                    }
-                    else
-                    {
-                        await Dispatcher.ProvisionHostRouteAsync(_handlerId!, cancellationToken)
-                            .ConfigureAwait(false);
-                        _hostRouteRunning = true;
-                    }
-                }
-                else
+                if (!HasRegisteredHandler)
                 {
                     if (registration is null)
                     {
@@ -314,36 +267,20 @@ internal sealed class ControllerRuntime
 
                     _registration = registration;
                     _handlerId = handlerId;
-                    if (IsEphemeralBootstrap)
-                    {
-                        if (!_staleBootstrapRoutesCleaned)
-                        {
-                            await Dispatcher.CleanupStaleBootstrapRoutesAsync(
-                                handlerId,
-                                cancellationToken).ConfigureAwait(false);
-                            _staleBootstrapRoutesCleaned = true;
-                        }
-
-                        _bootstrapRouteCleanupPending = true;
-                        var provisionedIdentity = await Dispatcher.ProvisionBootstrapRouteAsync(
-                            handlerId,
-                            cancellationToken).ConfigureAwait(false);
-                        if (provisionedIdentity is not { } identity)
-                        {
-                            throw new InvalidOperationException("The bootstrap route provisioning identity is unavailable.");
-                        }
-
-                        _bootstrapRouteIdentity = identity;
-                        _bootstrapRouteProvisioned = true;
-                        _hostRouteRunning = true;
-                    }
-                    else
-                    {
-                        await Dispatcher.ProvisionHostRouteAsync(handlerId, cancellationToken)
-                            .ConfigureAwait(false);
-                        _hostRouteRunning = true;
-                    }
                 }
+
+                if (deferResourceAcquisition)
+                {
+                    _resourceAcquisitionPending = true;
+                }
+                else
+                {
+                    await ProvisionHostRouteResourcesAsync(cancellationToken).ConfigureAwait(false);
+                }
+            }
+            else if (deferResourceAcquisition)
+            {
+                _resourceAcquisitionPending = true;
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -357,12 +294,94 @@ internal sealed class ControllerRuntime
         }
     }
 
+    /// <summary>Completes a replacement start once the previous generation released its resources.</summary>
+    internal async ValueTask AcquireDeferredResourcesAsync(CancellationToken cancellationToken)
+    {
+        if (Volatile.Read(ref _state) != 1 || !_resourceAcquisitionPending)
+        {
+            return;
+        }
+
+        await StartEnabledAdaptersAsync(cancellationToken).ConfigureAwait(false);
+        if (_options.EnableHostRoute)
+        {
+            await ProvisionHostRouteResourcesAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        _resourceAcquisitionPending = false;
+    }
+
+    private async ValueTask StartEnabledAdaptersAsync(CancellationToken cancellationToken)
+    {
+        foreach (var adapter in _transportAdapters)
+        {
+            if (!_options.IsTransportEnabled(adapter.Transport))
+            {
+                continue;
+            }
+
+            try
+            {
+                await adapter.StartAsync(Dispatcher, _options, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!adapter.IsStarted)
+                {
+                    throw new InvalidOperationException("The enabled transport did not start.");
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            finally
+            {
+                if (adapter.IsStarted && !_startedAdapters.Contains(adapter))
+                {
+                    _startedAdapters.Add(adapter);
+                }
+            }
+        }
+    }
+
+    private async ValueTask ProvisionHostRouteResourcesAsync(CancellationToken cancellationToken)
+    {
+        if (IsEphemeralBootstrap)
+        {
+            if (!_staleBootstrapRoutesCleaned)
+            {
+                await Dispatcher.CleanupStaleBootstrapRoutesAsync(
+                    _handlerId!,
+                    cancellationToken).ConfigureAwait(false);
+                _staleBootstrapRoutesCleaned = true;
+            }
+
+            _bootstrapRouteCleanupPending = true;
+            var provisionedIdentity = await Dispatcher.ProvisionBootstrapRouteAsync(
+                _handlerId!,
+                cancellationToken).ConfigureAwait(false);
+            if (provisionedIdentity is not { } identity)
+            {
+                throw new InvalidOperationException("The bootstrap route provisioning identity is unavailable.");
+            }
+
+            _bootstrapRouteIdentity = identity;
+            _bootstrapRouteProvisioned = true;
+            _hostRouteRunning = true;
+        }
+        else
+        {
+            await Dispatcher.ProvisionHostRouteAsync(_handlerId!, cancellationToken)
+                .ConfigureAwait(false);
+            _hostRouteRunning = true;
+        }
+    }
+
     /// <summary>Reloads validated Host settings and reconciles listeners before swapping admission options.</summary>
     internal async ValueTask<ControllerManagementResponse> ReloadAsync(
         long expectedVersion,
         CancellationToken cancellationToken)
     {
-        if (!IsStarted || _bridge is null)
+        // A replacement start that still waits for the previous generation's resources cannot
+        // reconcile listeners yet; fail the settings reload instead of racing the deferred bind.
+        if (!IsStarted || _bridge is null || _resourceAcquisitionPending)
         {
             return ControllerManagementResponseBuilder.Unavailable;
         }
@@ -780,6 +799,7 @@ internal sealed class ControllerRuntime
             // remains that should be left live once the handler has been tombstoned.
             await Dispatcher.StopAsync(CancellationToken.None).ConfigureAwait(false);
             await Dispatcher.QuiesceAsync().ConfigureAwait(false);
+            _resourceAcquisitionPending = false;
             Interlocked.Exchange(ref _state, 0);
         }
         catch

@@ -110,6 +110,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
     public ConcurrentQueue<ExtensionStatus> ReportedStatuses => ((FakeStatusSink)Status).Statuses;
     public string? LastLogText => ((FakeLogWriter)LogWriter).LastText;
 
+
     public HostConfigurationSnapshot ReadSnapshot()
     {
         lock (_sync)
@@ -930,10 +931,13 @@ public sealed class FakeExtensionRegistration : IExtensionRegistration
 }
 
 /// <summary>Start context handed to the controller entrypoint under test.</summary>
-public sealed class FakeExtensionStartContext(IExtensionHostBridge host, IExtensionRegistration registration) : IExtensionStartContext
+public sealed class FakeExtensionStartContext(
+    IExtensionHostBridge host,
+    IExtensionRegistration registration,
+    bool reloading = false) : IExtensionStartContext
 {
     public IExtensionHostBridge Host { get; } = host;
     public IExtensionRegistration Registration { get; } = registration;
     public IExtensionContractRegistry Contracts => Host.Contracts;
-    public bool Reloading => false;
+    public bool Reloading { get; } = reloading;
 }

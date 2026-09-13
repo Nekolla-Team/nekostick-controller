@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using Nekolla.Nekostick.Contracts;
@@ -206,9 +208,175 @@ public sealed class ControllerEntrypointTests
         await entrypoint.StopAsync(cancellationToken);
     }
 
+    [Fact]
+    public async Task StartAsync_WhenReplacingHttpListener_DefersBindUntilPreviousStopped()
+    {
+        var port = ControllerApiFixture.ReserveDualStackLoopbackPort();
+        const string firstKey = "first-generation-key-0123456789abcdef";
+        const string secondKey = "second-generation-key-0123456789abc";
+        var host = new FakeHostBridge(CreateOwnedSnapshot(
+            ImmutableArray<RouteConfiguration>.Empty,
+            extensionRecords: ImmutableArray.Create(CreateControllerRecord())));
+        using var first = new ControllerEntrypoint(new ControllerOptions
+        {
+            EnableHttpJson = true,
+            HttpPort = port,
+            ApiKey = firstKey
+        });
+        using var second = new ControllerEntrypoint(new ControllerOptions
+        {
+            EnableHttpJson = true,
+            HttpPort = port,
+            ApiKey = secondKey
+        });
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await first.StartAsync(
+            new FakeExtensionStartContext(host, new FakeExtensionRegistration()),
+            cancellationToken);
+
+        // The management listing now reports the running previous generation, exactly as the
+        // host would while the replacement candidate starts.
+        host.SetExtensionRunning(ControllerOptions.ExtensionId, running: true);
+
+        // The host starts the replacement while the previous generation still holds the port;
+        // binding now would collide, so this start must complete without touching the listener.
+        await second.StartAsync(
+            new FakeExtensionStartContext(host, new FakeExtensionRegistration(), reloading: true),
+            cancellationToken);
+
+        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
+        Assert.Equal(HttpStatusCode.OK, await GetStateStatusAsync(client, firstKey, cancellationToken));
+        Assert.Equal(HttpStatusCode.Unauthorized, await GetStateStatusAsync(client, secondKey, cancellationToken));
+
+        await first.StopAsync(cancellationToken);
+        await second.OnPreviousStoppedAsync(cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, await GetStateStatusAsync(client, secondKey, cancellationToken));
+        Assert.Equal(HttpStatusCode.Unauthorized, await GetStateStatusAsync(client, firstKey, cancellationToken));
+
+        await second.StopAsync(cancellationToken);
+    }
+
+    [Fact]
+    public async Task OnPreviousStoppedAsync_WhenDeferredAcquisitionFails_ReportsDegraded()
+    {
+        var port = ControllerApiFixture.ReserveDualStackLoopbackPort();
+        const string apiKey = "replacement-failure-key-0123456789abcdef";
+        var host = new FakeHostBridge(CreateOwnedSnapshot(
+            ImmutableArray<RouteConfiguration>.Empty,
+            extensionRecords: ImmutableArray.Create(CreateControllerRecord())));
+        using var replacement = new ControllerEntrypoint(new ControllerOptions
+        {
+            EnableHttpJson = true,
+            HttpPort = port,
+            ApiKey = apiKey
+        });
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        host.SetExtensionRunning(ControllerOptions.ExtensionId, running: true);
+
+        await replacement.StartAsync(
+            new FakeExtensionStartContext(host, new FakeExtensionRegistration(), reloading: true),
+            cancellationToken);
+
+        // A foreign holder grabbed the port while the replacement waited for the previous
+        // generation; the deferred bind must fail loudly instead of faking readiness.
+        using var foreign = new TcpListener(IPAddress.Loopback, port);
+        foreign.Start();
+
+        await Assert.ThrowsAnyAsync<Exception>(() =>
+            replacement.OnPreviousStoppedAsync(cancellationToken).AsTask());
+        Assert.Contains(host.ReportedStatuses, status =>
+            status.Kind == ExtensionStatusKind.Degraded &&
+            string.Equals(status.Code, "startup.deferred_acquisition_failed", StringComparison.Ordinal));
+
+        await replacement.StopAsync(cancellationToken);
+    }
+
+    [Fact]
+    public async Task StartAsync_BootstrapReplacement_DefersRouteProvisioningUntilPreviousStopped()
+    {
+        var host = new FakeHostBridge(CreateOwnedSnapshot(
+            ImmutableArray<RouteConfiguration>.Empty,
+            extensionRecords: ImmutableArray.Create(CreateControllerRecord())));
+        var firstRegistration = new FakeExtensionRegistration();
+        var secondRegistration = new FakeExtensionRegistration();
+        using var first = new ControllerEntrypoint();
+        using var second = new ControllerEntrypoint();
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await first.StartAsync(
+            new FakeExtensionStartContext(host, firstRegistration),
+            cancellationToken);
+
+        host.SetExtensionRunning(ControllerOptions.ExtensionId, running: true);
+        var bootstrapRoute = Assert.Single(host.ReadSnapshot().Routes);
+
+        const string configuredPath = "/configured-controller";
+        const string configuredApiKey = "configured-integration-key-0123456789abcdef";
+        var snapshot = host.ReadSnapshot();
+        var settingsWrite = await host.ConfigurationApi.ApplyAsync(
+            snapshot.Version,
+            new ExtensionConfigurationChangeSet(
+                ImmutableArray<ExtensionRouteConfiguration>.Empty,
+                ImmutableArray<Guid>.Empty,
+                ImmutableArray<ExtensionServiceConfiguration>.Empty,
+                ImmutableArray<Guid>.Empty,
+                new ExtensionSettingsConfiguration(
+                    ControllerOptions.ExtensionId,
+                    ControllerOptions.ConfigurationSchemaVersion,
+                    "{\"enableHostRoute\":true,\"hostRoutePath\":\"/configured-controller\",\"apiKey\":\"configured-integration-key-0123456789abcdef\",\"apiScope\":\"FullConfiguration\"}",
+                    1)),
+            cancellationToken);
+        Assert.True(settingsWrite.IsSuccess);
+
+        // The replacement hydrates the configured options and must not rewrite the bootstrap
+        // route the previous generation still owns; doing so breaks the stop-time ownership proof.
+        await second.StartAsync(
+            new FakeExtensionStartContext(host, secondRegistration, reloading: true),
+            cancellationToken);
+        var untouchedRoute = Assert.Single(host.ReadSnapshot().Routes);
+        Assert.Equal(bootstrapRoute.Id, untouchedRoute.Id);
+        Assert.Equal(bootstrapRoute.Matcher.Pattern, untouchedRoute.Matcher.Pattern);
+
+        await first.StopAsync(cancellationToken);
+        Assert.Empty(host.ReadSnapshot().Routes);
+
+        await second.OnPreviousStoppedAsync(cancellationToken);
+        var configuredRoute = Assert.Single(host.ReadSnapshot().Routes);
+        Assert.Equal(configuredPath, configuredRoute.Matcher.Pattern);
+
+        var handler = secondRegistration.Handler
+            ?? throw new InvalidOperationException("The replacement HostRoute handler is not registered.");
+        var stateResponse = await InvokeHandlerAsync(
+            handler,
+            configuredApiKey,
+            "GET",
+            ControllerManagementApiContract.StatePath,
+            cancellationToken: cancellationToken);
+        Assert.Equal(200, stateResponse.StatusCode);
+        using var stateDocument = JsonDocument.Parse(stateResponse.Body.ToArray());
+        Assert.False(stateDocument.RootElement.GetProperty("data").GetProperty("bootstrapMode").GetBoolean());
+
+        await second.StopAsync(cancellationToken);
+    }
+
+    private static async Task<HttpStatusCode> GetStateStatusAsync(
+        HttpClient client,
+        string apiKey,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, ControllerManagementApiContract.StatePath);
+        request.Headers.Add(ControllerManagementApiContract.ApiKeyHeaderName, apiKey);
+        using var response = await client.SendAsync(request, cancellationToken);
+        return response.StatusCode;
+    }
+
     private static HostConfigurationSnapshot CreateOwnedSnapshot(
         ImmutableArray<RouteConfiguration> routes,
-        string settingsJson = "{}") =>
+        string settingsJson = "{}",
+        ImmutableArray<ExtensionRecordConfiguration>? extensionRecords = null) =>
         new(
             version: 1,
             globalSettings: new GlobalSettingsConfiguration(
@@ -226,12 +394,21 @@ public sealed class ControllerEntrypointTests
                 proxyRetries: ProxyRetryConfiguration.Default),
             routes: routes,
             services: ImmutableArray<ServiceConfiguration>.Empty,
-            extensionRecords: ImmutableArray<ExtensionRecordConfiguration>.Empty,
+            extensionRecords: extensionRecords ?? ImmutableArray<ExtensionRecordConfiguration>.Empty,
             extensionSettings: ImmutableArray.Create(new ExtensionSettingsConfiguration(
                 ControllerOptions.ExtensionId,
                 ControllerOptions.ConfigurationSchemaVersion,
                 settingsJson,
                 0)));
+
+    private static ExtensionRecordConfiguration CreateControllerRecord() =>
+        new(
+            ControllerOptions.ExtensionId,
+            "1.0.0",
+            ExtensionLoadState.Loaded,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            recordVersion: 1);
 
     private static RouteConfiguration CreateHandlerRoute(string path)
     {
