@@ -1,5 +1,8 @@
 export const controllerConfig = {
   title: 'Controller Configuration',
+  webUi: 'Web UI',
+  webUiDisabledWarning:
+    'Disabling the Web UI stops serving this page after the settings reload. The current page stays usable until closed, and the API is unaffected.',
   httpListener: 'HTTP listener',
   httpPort: 'HTTP port',
   grpcListener: 'gRPC listener',

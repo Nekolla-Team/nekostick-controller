@@ -54,6 +54,7 @@ const enableUnixSocket = ref(false)
 const unixSocketPath = ref('')
 const corsOrigins = ref<string[]>([])
 const enableHostRoute = ref(false)
+const enableWebUi = ref(true)
 const hostRoutePath = ref('')
 const apiKey = ref('')
 let originalSettings: JsonObject = {}
@@ -103,6 +104,7 @@ async function load(): Promise<void> {
     enableHostRoute.value = originalSettings.enableHostRoute === true
     hostRoutePath.value =
       typeof originalSettings.hostRoutePath === 'string' ? originalSettings.hostRoutePath : ''
+    enableWebUi.value = originalSettings.enableWebUi !== false
     apiKey.value =
       typeof originalSettings.apiKey === 'string' && originalSettings.apiKey !== ''
         ? originalSettings.apiKey
@@ -197,6 +199,7 @@ function buildSettings(): JsonObject {
     ...originalSettings,
     enableHttpJson: enableHttp.value,
     enableHostRoute: enableHostRoute.value,
+    enableWebUi: enableWebUi.value,
     enableGrpc: enableGrpc.value,
     enableUnixSocket: enableUnixSocket.value,
     corsAllowedOrigins: corsOrigins.value.filter((origin) => origin.trim() !== ''),
@@ -323,6 +326,13 @@ async function save(): Promise<void> {
     >
       <n-spin :show="loading">
         <n-form label-placement="top">
+          <n-form-item>
+            <template #label>{{ t('controllerConfig.webUi') }}</template>
+            <n-switch v-model:value="enableWebUi" />
+          </n-form-item>
+          <n-alert v-if="!enableWebUi" type="warning" :show-icon="true">
+            {{ t('controllerConfig.webUiDisabledWarning') }}
+          </n-alert>
           <n-form-item>
             <template #label>{{ t('controllerConfig.httpListener') }}</template>
             <n-switch v-model:value="enableHttp" />
