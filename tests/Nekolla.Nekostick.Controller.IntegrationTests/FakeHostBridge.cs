@@ -27,6 +27,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
     private readonly ConcurrentQueue<string> _scheduledReloads = new();
     private readonly ConcurrentQueue<string> _synchronousReloads = new();
     private bool _refuseReloadSchedule;
+    private Exception? _readFailure;
 
     public FakeHostBridge(HostConfigurationSnapshot initialSnapshot, HostApiVersion? apiVersion = null)
     {
@@ -110,7 +111,11 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
 
     public ConcurrentQueue<ExtensionStatus> ReportedStatuses => ((FakeStatusSink)Status).Statuses;
     public string? LastLogText => ((FakeLogWriter)LogWriter).LastText;
+    /// <summary>Gets every text written to the host log, in order.</summary>
+    public IReadOnlyCollection<(ExtensionLogLevel Level, string Text)> LogEntries => ((FakeLogWriter)LogWriter).Entries;
 
+    /// <summary>Routes every subsequent full-configuration read to the given failure.</summary>
+    public void FailReads(Exception exception) => _readFailure = exception;
 
     public HostConfigurationSnapshot ReadSnapshot()
     {
@@ -637,6 +642,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
         public ValueTask<ConfigurationReadResult<HostConfigurationSnapshot>> ReadAsync(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (owner._readFailure is { } failure) throw failure;
             return ValueTask.FromResult(ConfigurationReadResult<HostConfigurationSnapshot>.Success(owner.ReadSnapshot()));
         }
 
@@ -660,9 +666,17 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
 
     private sealed class FakeLogWriter : IExtensionLogWriter
     {
+        private readonly ConcurrentQueue<(ExtensionLogLevel Level, string Text)> _entries = new();
+
         public string? LastText { get; private set; }
 
-        public void WriteText(ExtensionLogLevel level, string text) => LastText = text;
+        public IReadOnlyCollection<(ExtensionLogLevel Level, string Text)> Entries => _entries;
+
+        public void WriteText(ExtensionLogLevel level, string text)
+        {
+            LastText = text;
+            _entries.Enqueue((level, text));
+        }
     }
 
     private sealed class FakeManagementApi(FakeHostBridge owner) : IExtensionManagementApi

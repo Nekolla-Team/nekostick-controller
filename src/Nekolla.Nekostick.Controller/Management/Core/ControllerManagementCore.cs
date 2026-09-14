@@ -18,6 +18,7 @@ internal sealed partial class ControllerManagementCore
     private readonly Func<CancellationToken, ValueTask<ControllerStateDto?>>? _stateProvider;
     private readonly SemaphoreSlim? _mutationGate;
     private readonly Func<bool>? _admissionProbe;
+    private readonly HashSet<string> _loggedDispatchFailures = new(StringComparer.Ordinal);
     private static readonly SearchValues<char> InvalidPathCharacters = SearchValues.Create("?#\0");
 
     internal ControllerManagementCore(
@@ -34,6 +35,24 @@ internal sealed partial class ControllerManagementCore
         _stateProvider = stateProvider;
         _mutationGate = mutationGate;
         _admissionProbe = admissionProbe;
+    }
+    /// <summary>
+    /// Logs a dispatch failure that is being hidden behind a 503 response. Each distinct
+    /// method/path/exception combination is logged once per core instance so a polling client
+    /// against a broken surface cannot flood the host log.
+    /// </summary>
+    private void LogDispatchFailure(string method, string? path, Exception exception)
+    {
+        if (_bridge is not IExtensionHostBridge13 { LogWriter: { } logWriter }) return;
+        var key = string.Concat(method, " ", path, " ", exception.GetType().FullName);
+        lock (_loggedDispatchFailures)
+        {
+            if (!_loggedDispatchFailures.Add(key)) return;
+        }
+
+        logWriter.WriteText(
+            ExtensionLogLevel.Warning,
+            $"Management request {method} {path} failed and was answered 503 unavailable: {exception}");
     }
 
     internal async ValueTask<ControllerManagementResponse> DispatchAsync(ControllerManagementRequest request, CancellationToken cancellationToken)
@@ -83,12 +102,14 @@ internal sealed partial class ControllerManagementCore
         {
             return ControllerManagementResponseBuilder.Unsupported;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException exception)
         {
+            LogDispatchFailure(method, path, exception);
             return ControllerManagementResponseBuilder.Unavailable;
         }
-        catch
+        catch (Exception exception)
         {
+            LogDispatchFailure(method, path, exception);
             return ControllerManagementResponseBuilder.Unavailable;
         }
     }
@@ -147,8 +168,9 @@ internal sealed partial class ControllerManagementCore
         {
             return ControllerManagementResponseBuilder.Unsupported;
         }
-        catch
+        catch (Exception exception)
         {
+            LogDispatchFailure(method, path, exception);
             return ControllerManagementResponseBuilder.Unavailable;
         }
     }

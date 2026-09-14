@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Net;
+using System.Linq;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
@@ -425,6 +426,35 @@ public sealed class ControllerEntrypointTests
         using var document = JsonDocument.Parse(response.Body.ToArray());
         var dto = Assert.Single(document.RootElement.GetProperty("data").EnumerateArray().ToArray());
         Assert.Equal(JsonValueKind.Null, dto.GetProperty("ownerExtensionId").ValueKind);
+
+        await entrypoint.StopAsync(cancellationToken);
+    }
+
+    [Fact]
+    public async Task Dispatch_WhenSnapshotReadThrows_LogsWarningOnceAndAnswers503()
+    {
+        var host = new FakeHostBridge(CreateOwnedSnapshot(ImmutableArray<RouteConfiguration>.Empty));
+        var registration = new FakeExtensionRegistration();
+        using var entrypoint = new ControllerEntrypoint();
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await entrypoint.StartAsync(new FakeExtensionStartContext(host, registration), cancellationToken);
+
+        var handler = registration.Handler ?? throw new InvalidOperationException("The HostRoute handler is not registered.");
+        var apiKey = ReadBootstrapApiKey(host);
+        host.FailReads(new InvalidOperationException("store offline"));
+
+        // Dispatch failures: every failure is answered 503, but a polling client must not flood the log.
+        Assert.Equal(503, (await InvokeHandlerAsync(handler, apiKey, "GET", ControllerManagementApiContract.RoutesPath, cancellationToken: cancellationToken)).StatusCode);
+        Assert.Equal(503, (await InvokeHandlerAsync(handler, apiKey, "GET", ControllerManagementApiContract.RoutesPath, cancellationToken: cancellationToken)).StatusCode);
+        Assert.Single(host.LogEntries.Where(entry =>
+            entry.Level == ExtensionLogLevel.Warning && entry.Text.Contains(ControllerManagementApiContract.RoutesPath, StringComparison.Ordinal)));
+
+        // The state endpoint fails through the runtime's own snapshot read and logs separately, once.
+        Assert.Equal(503, (await InvokeHandlerAsync(handler, apiKey, "GET", ControllerManagementApiContract.StatePath, cancellationToken: cancellationToken)).StatusCode);
+        Assert.Equal(503, (await InvokeHandlerAsync(handler, apiKey, "GET", ControllerManagementApiContract.StatePath, cancellationToken: cancellationToken)).StatusCode);
+        Assert.Single(host.LogEntries.Where(entry =>
+            entry.Level == ExtensionLogLevel.Warning && entry.Text.Contains("state endpoint", StringComparison.Ordinal)));
 
         await entrypoint.StopAsync(cancellationToken);
     }

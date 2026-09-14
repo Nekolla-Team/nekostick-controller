@@ -18,6 +18,7 @@ internal sealed class ControllerRuntime
     private bool _bootstrapRouteProvisioned;
     private bool _hostRouteRunning;
     private bool _resourceAcquisitionPending;
+    private bool _stateReadFailureLogged;
     private readonly List<IControllerTransportAdapter> _startedAdapters = new();
     private IExtensionRegistration? _registration;
     private string? _handlerId;
@@ -89,17 +90,20 @@ internal sealed class ControllerRuntime
         {
             throw;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException exception)
         {
+            LogStateReadFailure($"snapshot read threw and the state endpoint will answer 503 unavailable: {exception}");
             return null;
         }
-        catch (NotSupportedException)
+        catch (NotSupportedException exception)
         {
+            LogStateReadFailure($"snapshot read is unsupported and the state endpoint will answer 503 unavailable: {exception}");
             return null;
         }
 
         if (!read.IsSuccess || read.Value is not { } snapshot)
         {
+            LogStateReadFailure($"snapshot read failed and the state endpoint will answer 503 unavailable: {string.Join(", ", read.Errors.Select(error => $"{error.Code} {error.Message}"))}");
             return null;
         }
 
@@ -131,6 +135,16 @@ internal sealed class ControllerRuntime
             ? ReadHostInfo(bridge13)
             : null;
         return BuildState(options, hostRouteRunning, hostInfo);
+    }
+    /// <summary>Logs a state snapshot read failure once; the polling state endpoint must not flood the host log.</summary>
+    private void LogStateReadFailure(string message)
+    {
+        if (_stateReadFailureLogged) return;
+        _stateReadFailureLogged = true;
+        if (_bridge is IExtensionHostBridge13 { LogWriter: { } logWriter })
+        {
+            logWriter.WriteText(ExtensionLogLevel.Warning, message);
+        }
     }
 
     private ControllerStateDto BuildState(ControllerOptions options, bool hostRouteRunning, ControllerHostInfoDto? host = null)
