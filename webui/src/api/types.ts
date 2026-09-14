@@ -175,6 +175,8 @@ export interface RouteDto {
   maxConcurrentRequests: number | null;
   requestReadTimeoutMs: number | null;
   proxyRetries: ProxyRetries | null;
+  /** Owning extension identifier; null or absent denotes host ownership or a host older than API 1.4. */
+  readonly ownerExtensionId?: string | null;
 }
 
 export interface RouteWriteDto {

@@ -6,6 +6,8 @@ export const routes = {
     matcher: '匹配器',
     target: '目标',
     priority: '优先级',
+    owner: '归属',
+    ownerHost: '宿主',
   },
   modal: {
     editTitle: '编辑路由',

@@ -34,6 +34,7 @@ import {
   patchService,
   putEnvironment,
   servicesPath,
+  getAllRuntime,
 } from '../api/resources/services'
 import type {
   HealthCheckType,
@@ -69,6 +70,14 @@ const queryClient = useQueryClient()
 const cas = useCas(queryClient)
 const servicesQuery = useQuery({ queryKey: ['services'], queryFn: listServices })
 const rows = computed(() => servicesQuery.data.value ?? [])
+// Runtime telemetry is the only surface that carries the owning extension; the endpoint is
+// unavailable on hosts older than API 1.3, in which case the owner column stays empty.
+const runtimesQuery = useQuery({ queryKey: ['services', 'runtime'], queryFn: getAllRuntime, retry: false })
+const ownerByServiceId = computed(() => {
+  const map = new Map<string, string | null>()
+  for (const snapshot of runtimesQuery.data.value ?? []) map.set(snapshot.serviceId, snapshot.ownerExtensionId)
+  return map
+})
 const showForm = ref(false)
 const editingId = ref<string | null>(null)
 const formError = ref<string | null>(null)
@@ -313,6 +322,10 @@ function healthText(service: ServiceDto): string {
 
 const columns = computed<DataTableColumns<ServiceDto>>(() => [
   { title: t('services.columns.file'), key: 'fileName' },
+  {
+    title: t('services.columns.owner'), key: 'owner',
+    render: (row) => ownerByServiceId.value.get(row.id) ?? '—',
+  },
   {
     title: t('common.enabled'), key: 'enabled', width: 80,
     render: (row) => h(NSwitch, {

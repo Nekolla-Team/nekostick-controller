@@ -375,6 +375,10 @@ const columns = computed<DataTableColumns<RouteDto>>(() => [
   { title: t('routes.columns.target'), key: 'target', render: targetText },
   { title: t('routes.columns.priority'), key: 'priority', width: 100 },
   {
+    title: t('routes.columns.owner'), key: 'ownerExtensionId',
+    render: (row) => row.ownerExtensionId ?? t('routes.columns.ownerHost'),
+  },
+  {
     title: t('common.actions'),
     key: 'actions',
     width: 180,

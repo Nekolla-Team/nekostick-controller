@@ -6,6 +6,8 @@ export const routes = {
     matcher: 'Matcher',
     target: 'Target',
     priority: 'Priority',
+    owner: 'Owner',
+    ownerHost: 'Host',
   },
   modal: {
     editTitle: 'Edit route',
@@ -102,6 +104,8 @@ export const routes = {
       mode: 'Mode',
       replaceTemplate: 'Replace template',
       priority: 'Priority',
+    owner: 'Owner',
+    ownerHost: 'Host',
     },
     advanced: {
       title: 'Advanced settings',

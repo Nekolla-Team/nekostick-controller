@@ -12,6 +12,7 @@ export const services = {
   },
   columns: {
     file: '文件',
+    owner: '归属',
     startMode: '启动模式',
     restartPolicy: '重启策略',
     healthCheck: '健康检查',
