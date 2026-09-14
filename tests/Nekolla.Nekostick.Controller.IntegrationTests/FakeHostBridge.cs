@@ -177,6 +177,14 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
             _reportedStatusesByExtension[extensionId] = new ExtensionStatus(kind, code);
         }
     }
+    /// <summary>Clears every extension-reported status so a test asserts only its own setup.</summary>
+    public void ClearReportedStatuses()
+    {
+        lock (_sync)
+        {
+            _reportedStatusesByExtension.Clear();
+        }
+    }
 
     /// <summary>Gets the extension identifiers passed to the callback-safe scheduling entry point.</summary>
     public IReadOnlyCollection<string> ScheduledReloads => _scheduledReloads.ToArray();

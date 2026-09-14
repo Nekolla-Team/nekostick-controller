@@ -512,6 +512,8 @@ public sealed class ExtensionsApi14Tests(ControllerApi14Fixture fixture) : IClas
     [Fact]
     public async Task ExtensionRecords_ReportedStatusNullWhenNeverReported()
     {
+        fixture.Host.ClearReportedStatuses();
+
         using var client = fixture.CreateHttpClient();
         using var member = await client.GetAsync($"/v1/extensions/{ControllerApiFixture.TestExtensionId}", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, member.StatusCode);
