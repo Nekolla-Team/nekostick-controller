@@ -539,12 +539,17 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                // The generation is already published; surface the acquisition failure honestly
-                // instead of leaving the extension reporting a ready state it cannot serve.
+                // The previous generation is already fully stopped when this hook runs: failing it
+                // cannot restore service, it only marks the old generation stopped and lets the host
+                // schedule one blind recovery publication. The contract therefore asks hooks to be
+                // best-effort. Report the degraded state (visible via management listings on API 1.4
+                // hosts) and continue; the registered HostRoute handler keeps serving, so the web UI
+                // remains reachable to fix the conflict, and the next replacement retries acquisition.
                 context.Host.Status.Report(new ExtensionStatus(
                     ExtensionStatusKind.Degraded,
                     "startup.deferred_acquisition_failed"));
-                throw;
+                host13.LogWriter.WriteText(ExtensionLogLevel.Warning,
+                    $"Controller deferred resource acquisition failed; the generation keeps serving without its listeners: {exception.Message}");
             }
         }
         finally

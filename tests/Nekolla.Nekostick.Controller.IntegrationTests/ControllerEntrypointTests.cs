@@ -259,7 +259,7 @@ public sealed class ControllerEntrypointTests
     }
 
     [Fact]
-    public async Task OnPreviousStoppedAsync_WhenDeferredAcquisitionFails_ReportsDegraded()
+    public async Task OnPreviousStoppedAsync_WhenDeferredAcquisitionFails_ReportsDegradedAndContinues()
     {
         var port = ControllerApiFixture.ReserveDualStackLoopbackPort();
         const string apiKey = "replacement-failure-key-0123456789abcdef";
@@ -281,15 +281,18 @@ public sealed class ControllerEntrypointTests
             cancellationToken);
 
         // A foreign holder grabbed the port while the replacement waited for the previous
-        // generation; the deferred bind must fail loudly instead of faking readiness.
+        // generation. The commit is already past the point of no return, so the hook must
+        // report the failure and continue instead of throwing: the contract keeps the old
+        // generation stopped either way, and continuing leaves the registered HostRoute
+        // handler serving so the conflict stays fixable through the API.
         using var foreign = new TcpListener(IPAddress.Loopback, port);
         foreign.Start();
 
-        await Assert.ThrowsAnyAsync<Exception>(() =>
-            replacement.OnPreviousStoppedAsync(cancellationToken).AsTask());
+        await replacement.OnPreviousStoppedAsync(cancellationToken);
         Assert.Contains(host.ReportedStatuses, status =>
             status.Kind == ExtensionStatusKind.Degraded &&
             string.Equals(status.Code, "startup.deferred_acquisition_failed", StringComparison.Ordinal));
+        Assert.Contains("deferred resource acquisition failed", host.LastLogText, StringComparison.OrdinalIgnoreCase);
 
         await replacement.StopAsync(cancellationToken);
     }
