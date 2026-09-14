@@ -349,10 +349,10 @@ export interface ExtensionRecord {
   isRunning: boolean;
   manifestVersion: string | null;
   contentHash: string | null;
-  /** Latest status kind reported by the running extension ('Healthy' | 'Degraded'); null when none was reported or the host predates API 1.4. */
-  reportedStatusKind: string | null;
-  /** Latest status code reported by the running extension; null when none was reported or the host predates API 1.4. */
-  reportedStatusCode: string | null;
+  /** Latest status kind reported by the running extension ('Healthy' | 'Degraded'); null or absent when none was reported or the host predates API 1.4. */
+  reportedStatusKind?: string | null;
+  /** Latest status code reported by the running extension; null or absent when none was reported or the host predates API 1.4. */
+  reportedStatusCode?: string | null;
 }
 export interface ExtensionInstallResult {
   id: string;
