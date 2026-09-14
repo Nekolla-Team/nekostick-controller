@@ -133,6 +133,8 @@ public sealed class ControllerRouteReadDto
     [JsonPropertyName("requestReadTimeoutMs")] public long? RequestReadTimeoutMs { get; init; }
     /// <summary>Optional route-specific proxy retry policy.</summary>
     [JsonPropertyName("proxyRetries")] public ControllerProxyRetryDto? ProxyRetries { get; init; }
+    /// <summary>Owning extension identifier; null denotes host ownership or a host older than API 1.4.</summary>
+    [JsonPropertyName("ownerExtensionId")] public string? OwnerExtensionId { get; init; }
 }
 
 /// <summary>Write representation for route create/patch. Identity and server fields are absent.</summary>

@@ -21,7 +21,7 @@ internal sealed partial class ControllerManagementCore
         {
             Version = snapshot.Version,
             GlobalSettings = ControllerContractMapper.ToRead(snapshot.GlobalSettings),
-            Routes = snapshot.Routes.Where(route => !IsReservedRoute(route)).Select(ControllerContractMapper.ToRead).ToImmutableArray(),
+            Routes = snapshot.Routes.Where(route => !IsReservedRoute(route)).Select(MapRoute).ToImmutableArray(),
             Services = snapshot.Services.Select(ControllerContractMapper.ToRead).ToImmutableArray(),
             Extensions = extensions
         };

@@ -6,12 +6,18 @@ namespace Nekolla.Nekostick.Controller.Management;
 
 internal sealed partial class ControllerManagementCore
 {
+    /// <summary>Maps a route, including the owning extension only when the negotiated host API provides it.</summary>
+    private ControllerRouteReadDto MapRoute(RouteConfiguration route) =>
+        _bridge is IExtensionHostBridge13 bridge13 && ExtensionHostApiSupport.IsApi14Supported(bridge13.ApiVersion)
+            ? ControllerContractMapper.ToReadApi14(route)
+            : ControllerContractMapper.ToRead(route);
+
     private async ValueTask<ControllerManagementResponse> ReadRoutesAsync(ControllerManagementRequest request, CancellationToken cancellationToken)
     {
         if (!RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
         var read = await ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
-        return ControllerManagementResponseBuilder.Success(snapshot.Routes.Where(route => !IsReservedRoute(route)).Select(ControllerContractMapper.ToRead).ToImmutableArray(), snapshot.Version);
+        return ControllerManagementResponseBuilder.Success(snapshot.Routes.Where(route => !IsReservedRoute(route)).Select(MapRoute).ToImmutableArray(), snapshot.Version);
     }
 
     private async ValueTask<ControllerManagementResponse> ReadRouteAsync(ControllerManagementRequest request, Guid routeId, CancellationToken cancellationToken)
@@ -20,7 +26,7 @@ internal sealed partial class ControllerManagementCore
         var read = await ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
         var route = snapshot.Routes.FirstOrDefault(candidate => candidate.Id == routeId);
-        return route is null || IsReservedRoute(route) ? ControllerManagementResponseBuilder.NotFound : ControllerManagementResponseBuilder.Success(ControllerContractMapper.ToRead(route), snapshot.Version);
+        return route is null || IsReservedRoute(route) ? ControllerManagementResponseBuilder.NotFound : ControllerManagementResponseBuilder.Success(MapRoute(route), snapshot.Version);
     }
 
     private async ValueTask<ControllerManagementResponse> CreateRouteAsync(ControllerManagementRequest request, CancellationToken cancellationToken)
@@ -34,7 +40,7 @@ internal sealed partial class ControllerManagementCore
         if (IsReservedRoutePayload(payload)) return ControllerManagementResponseBuilder.ReservedRoute;
         var route = ControllerContractMapper.ToContract(payload, current: null, createId: Guid.CreateVersion7());
         var write = await ReplaceAsync(expectedVersion, NewChanges(snapshot, routes: snapshot.Routes.Add(route)), cancellationToken).ConfigureAwait(false);
-        return write.IsSuccess ? ControllerManagementResponseBuilder.Success(ControllerContractMapper.ToRead(route), write.NewVersion!.Value, 201, $"{ControllerManagementApiContract.RoutesPath}/{route.Id}") : ControllerManagementResponseBuilder.FromConfigurationErrors(write.Errors);
+        return write.IsSuccess ? ControllerManagementResponseBuilder.Success(MapRoute(route), write.NewVersion!.Value, 201, $"{ControllerManagementApiContract.RoutesPath}/{route.Id}") : ControllerManagementResponseBuilder.FromConfigurationErrors(write.Errors);
     }
 
     private async ValueTask<ControllerManagementResponse> PatchRouteAsync(ControllerManagementRequest request, Guid routeId, CancellationToken cancellationToken)
@@ -51,7 +57,7 @@ internal sealed partial class ControllerManagementCore
         if (IsReservedRoutePayload(payload)) return ControllerManagementResponseBuilder.ReservedRoute;
         var route = ControllerContractMapper.ToContract(payload, current);
         var write = await ReplaceAsync(expectedVersion, NewChanges(snapshot, routes: snapshot.Routes.Select(item => item.Id == routeId ? route : item).ToImmutableArray()), cancellationToken).ConfigureAwait(false);
-        return write.IsSuccess ? ControllerManagementResponseBuilder.Success(ControllerContractMapper.ToRead(route), write.NewVersion!.Value) : ControllerManagementResponseBuilder.FromConfigurationErrors(write.Errors);
+        return write.IsSuccess ? ControllerManagementResponseBuilder.Success(MapRoute(route), write.NewVersion!.Value) : ControllerManagementResponseBuilder.FromConfigurationErrors(write.Errors);
     }
 
     private async ValueTask<ControllerManagementResponse> DeleteRouteAsync(ControllerManagementRequest request, Guid routeId, CancellationToken cancellationToken)

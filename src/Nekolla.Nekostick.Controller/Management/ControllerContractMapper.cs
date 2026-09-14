@@ -30,6 +30,21 @@ internal static class ControllerContractMapper
         MaxRequestHeaderBytes = source.MaxRequestHeaderBytes, MaxConcurrentRequests = source.MaxConcurrentRequests,
         RequestReadTimeoutMs = source.RequestReadTimeout?.Ticks / TimeSpan.TicksPerMillisecond, ProxyRetries = source.ProxyRetries is null ? null : ToRead(source.ProxyRetries)
     };
+    /// <summary>Maps an API 1.4 route, including its owning extension. NoInlining: touches 1.4-only members.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static ControllerRouteReadDto ToReadApi14(RouteConfiguration source)
+    {
+        var mapped = ToRead(source);
+        return new ControllerRouteReadDto
+        {
+            Id = mapped.Id, Enabled = mapped.Enabled, Matcher = mapped.Matcher, Target = mapped.Target, Priority = mapped.Priority,
+            Forwarding = mapped.Forwarding, RequestHeaderRewrites = mapped.RequestHeaderRewrites, ResponseHeaderRewrites = mapped.ResponseHeaderRewrites,
+            MetadataJson = mapped.MetadataJson, CreatedAt = mapped.CreatedAt, UpdatedAt = mapped.UpdatedAt, Version = mapped.Version,
+            ClientIpRatePolicy = mapped.ClientIpRatePolicy, MaxRequestBodyBytes = mapped.MaxRequestBodyBytes,
+            MaxRequestHeaderBytes = mapped.MaxRequestHeaderBytes, MaxConcurrentRequests = mapped.MaxConcurrentRequests,
+            RequestReadTimeoutMs = mapped.RequestReadTimeoutMs, ProxyRetries = mapped.ProxyRetries, OwnerExtensionId = source.OwnerExtensionId
+        };
+    }
 
     internal static ControllerServiceReadDto ToRead(ServiceConfiguration source) => new()
     {

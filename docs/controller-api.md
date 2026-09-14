@@ -299,6 +299,8 @@ route 的主要可变字段是 `enabled`、`matcher`、`target`、`priority`、`
 
 `matcher.type` 是 `Exact`、`ExactCaseInsensitive`、`Prefix`、`PrefixCaseInsensitive` 或 `Regex`。`target.type` 是 `Microservice`、`StaticFile` 或 `ExtensionHandler`。示例中的 `rootPath: null` 和 `handlerId: null` 只是明确表示未使用该 target 字段；普通 PATCH 也可以省略这些字段。`forwarding.mode` 是 `Preserve`、`Strip` 或 `Replace`。
 
+route 的只读字段 `ownerExtensionId` 标示归属扩展：`null` 表示该 route 归属 Host 本身（全局配置面），非空值是写入它的扩展 id。该字段在 Host API `1.4` 及以上才返回，更低版本一律为 `null`；它不可写，通过本 API 创建或修改的 route 始终保持 Host 归属。
+
 ### 6.3 Service
 
 service 的可变字段是 `enabled`、`fileName`、`argumentList`、`workingDirectory`、`startMode`、`restartPolicy` 和 `healthCheck`。create 可一次性提供 `environment` map；service read DTO 永远不会内嵌 environment。
@@ -368,9 +370,13 @@ DELETE 清空 environment。environment value 可能包含 secret，应按敏感
   "forwardedRequestCount": 1200,
   "activeForwardedRequestCount": 3,
   "lastUpdatedAt": "2026-08-24T01:25:00.0000000+00:00",
-  "lastHealthAt": "2026-08-24T01:24:59.0000000+00:00"
+  "lastHealthAt": "2026-08-24T01:24:59.0000000+00:00",
+  "ownerExtensionId": null
 }
 ```
+
+`ownerExtensionId` 标示该服务实例的归属扩展；`null` 表示由 Host 直接管理。
+
 
 字段语义：
 
@@ -386,6 +392,7 @@ DELETE 清空 environment。environment value 可能包含 secret，应按敏感
 | `activeForwardedRequestCount` | 当前转发中的请求数 |
 | `lastUpdatedAt` | telemetry 最后更新时间，未知为 `null` |
 | `lastHealthAt` | 最近健康检查时间，未知为 `null` |
+| `ownerExtensionId` | 归属扩展 id；Host 直接管理时为 `null` |
 
 控制器不会伪造 Host 没有的 telemetry。member 不存在时返回 `404 not_found`；能力不支持返回 `501 unsupported`；存储或 runtime 数据不可用返回 `503 storage_unavailable`。
 

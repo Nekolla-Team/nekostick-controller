@@ -365,6 +365,70 @@ public sealed class ControllerEntrypointTests
         await second.StopAsync(cancellationToken);
     }
 
+    [Fact]
+    public async Task GetRoutes_OnApi14Host_SurfacesOwnerExtensionId()
+    {
+        var port = ControllerApiFixture.ReserveDualStackLoopbackPort();
+        const string apiKey = "route-owner-key-0123456789abcdef";
+        var owned = CreateHandlerRoute("/vendor-owned", handlerId: "vendor.other.handler", ownerExtensionId: "vendor.other");
+        var hostOwned = CreateHandlerRoute("/plain", handlerId: "vendor.other.other");
+        var host = new FakeHostBridge(
+            CreateOwnedSnapshot(ImmutableArray.Create(owned, hostOwned)),
+            new HostApiVersion(1, 4, 0));
+        using var entrypoint = new ControllerEntrypoint(new ControllerOptions
+        {
+            EnableHttpJson = true,
+            HttpPort = port,
+            ApiKey = apiKey
+        });
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await entrypoint.StartAsync(
+            new FakeExtensionStartContext(host, new FakeExtensionRegistration()),
+            cancellationToken);
+
+        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
+        using var request = new HttpRequestMessage(HttpMethod.Get, ControllerManagementApiContract.RoutesPath);
+        request.Headers.Add(ControllerManagementApiContract.ApiKeyHeaderName, apiKey);
+        using var response = await client.SendAsync(request, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        var routes = document.RootElement.GetProperty("data").EnumerateArray().ToArray();
+        Assert.Equal(2, routes.Length);
+        var ownedDto = routes.Single(candidate => candidate.GetProperty("id").GetGuid() == owned.Id);
+        Assert.Equal("vendor.other", ownedDto.GetProperty("ownerExtensionId").GetString());
+        var hostOwnedDto = routes.Single(candidate => candidate.GetProperty("id").GetGuid() == hostOwned.Id);
+        Assert.Equal(JsonValueKind.Null, hostOwnedDto.GetProperty("ownerExtensionId").ValueKind);
+
+        await entrypoint.StopAsync(cancellationToken);
+    }
+
+    [Fact]
+    public async Task GetRoutes_OnPreApi14Host_OmitsOwnerExtensionId()
+    {
+        var owned = CreateHandlerRoute("/vendor-owned", handlerId: "vendor.other.handler", ownerExtensionId: "vendor.other");
+        var host = new FakeHostBridge(CreateOwnedSnapshot(ImmutableArray.Create(owned)));
+        var registration = new FakeExtensionRegistration();
+        using var entrypoint = new ControllerEntrypoint();
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await entrypoint.StartAsync(new FakeExtensionStartContext(host, registration), cancellationToken);
+
+        var handler = registration.Handler ?? throw new InvalidOperationException("The HostRoute handler is not registered.");
+        var response = await InvokeHandlerAsync(
+            handler,
+            ReadBootstrapApiKey(host),
+            "GET",
+            ControllerManagementApiContract.RoutesPath,
+            cancellationToken: cancellationToken);
+        Assert.Equal(200, response.StatusCode);
+        using var document = JsonDocument.Parse(response.Body.ToArray());
+        var dto = Assert.Single(document.RootElement.GetProperty("data").EnumerateArray().ToArray());
+        Assert.Equal(JsonValueKind.Null, dto.GetProperty("ownerExtensionId").ValueKind);
+
+        await entrypoint.StopAsync(cancellationToken);
+    }
+
     private static async Task<HttpStatusCode> GetStateStatusAsync(
         HttpClient client,
         string apiKey,
@@ -413,7 +477,7 @@ public sealed class ControllerEntrypointTests
             DateTimeOffset.UtcNow,
             recordVersion: 1);
 
-    private static RouteConfiguration CreateHandlerRoute(string path)
+    private static RouteConfiguration CreateHandlerRoute(string path, string? handlerId = null, string? ownerExtensionId = null)
     {
         var now = DateTimeOffset.UtcNow;
         return new RouteConfiguration(
@@ -424,7 +488,7 @@ public sealed class ControllerEntrypointTests
                 path,
                 ImmutableArray<string>.Empty,
                 ImmutableArray<string>.Empty),
-            new ExtensionHandlerRouteTargetConfiguration(ControllerManagementApiContract.HandlerId),
+            new ExtensionHandlerRouteTargetConfiguration(handlerId ?? ControllerManagementApiContract.HandlerId),
             int.MaxValue,
             new ForwardingConfiguration(ForwardingMode.Preserve, null),
             ImmutableArray<HeaderRewriteConfiguration>.Empty,
@@ -438,7 +502,8 @@ public sealed class ControllerEntrypointTests
             null,
             null,
             null,
-            null);
+            null,
+            ownerExtensionId);
     }
 
     private static string ReadBootstrapApiKey(FakeHostBridge host)
