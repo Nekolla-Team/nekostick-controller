@@ -54,7 +54,10 @@ public enum ControllerHostReadinessState
     Ready,
     /// <summary>A snapshot is available while persistence capabilities are degraded.</summary>
     [JsonStringEnumMemberName("degraded")]
-    Degraded
+    Degraded,
+    /// <summary>A configuration publication is in flight; readiness advances when it completes. Reported only by API 1.4 hosts.</summary>
+    [JsonStringEnumMemberName("publishing")]
+    Publishing
 }
 
 /// <summary>Contains safe, non-sensitive host information exposed by API 1.3.3.</summary>

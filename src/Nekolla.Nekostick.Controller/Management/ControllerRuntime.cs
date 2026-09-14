@@ -179,6 +179,7 @@ internal sealed class ControllerRuntime
                 ExtensionHostReadinessState.Unready => ControllerHostReadinessState.Unready,
                 ExtensionHostReadinessState.Ready => ControllerHostReadinessState.Ready,
                 ExtensionHostReadinessState.Degraded => ControllerHostReadinessState.Degraded,
+                ExtensionHostReadinessState.Publishing => ControllerHostReadinessState.Publishing,
                 _ => ControllerHostReadinessState.Unknown
             }
         };

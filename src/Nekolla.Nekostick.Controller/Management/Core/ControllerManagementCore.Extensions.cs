@@ -14,9 +14,7 @@ internal sealed partial class ControllerManagementCore
         if (ExtensionManagement is not { } management) return ControllerManagementResponseBuilder.Unsupported;
         var read = await management.ListAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
-        var records = _bridge is IExtensionHostBridge13 bridge13 && ExtensionHostApiSupport.IsApi133Supported(bridge13.ApiVersion)
-            ? read.Value.Select(ControllerContractMapper.ToReadApi133).ToImmutableArray()
-            : read.Value.Select(ControllerContractMapper.ToRead).ToImmutableArray();
+        var records = read.Value.Select(MapExtensionEntry).ToImmutableArray();
         return ControllerManagementResponseBuilder.SuccessUnversioned(records);
     }
 
@@ -28,11 +26,18 @@ internal sealed partial class ControllerManagementCore
         if (!read.IsSuccess) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
         var extension = read.Value.FirstOrDefault(entry => string.Equals(entry.ExtensionId, extensionId, StringComparison.Ordinal));
         if (extension is null) return ControllerManagementResponseBuilder.NotFound;
-        var mapped = _bridge is IExtensionHostBridge13 bridge13 && ExtensionHostApiSupport.IsApi133Supported(bridge13.ApiVersion)
-            ? ControllerContractMapper.ToReadApi133(extension)
-            : ControllerContractMapper.ToRead(extension);
+        var mapped = MapExtensionEntry(extension);
         return ControllerManagementResponseBuilder.SuccessUnversioned(mapped);
     }
+    /// <summary>Maps a management entry, including only the members the negotiated host API actually provides.</summary>
+    private ControllerExtensionRecordReadDto MapExtensionEntry(ExtensionManagementEntry entry) =>
+        _bridge is IExtensionHostBridge13 bridge13
+            ? ExtensionHostApiSupport.IsApi14Supported(bridge13.ApiVersion)
+                ? ControllerContractMapper.ToReadApi14(entry)
+                : ExtensionHostApiSupport.IsApi133Supported(bridge13.ApiVersion)
+                    ? ControllerContractMapper.ToReadApi133(entry)
+                    : ControllerContractMapper.ToRead(entry)
+            : ControllerContractMapper.ToRead(entry);
 
     private async ValueTask<ControllerManagementResponse> RefreshExtensionsAsync(ControllerManagementRequest request, CancellationToken cancellationToken)
     {

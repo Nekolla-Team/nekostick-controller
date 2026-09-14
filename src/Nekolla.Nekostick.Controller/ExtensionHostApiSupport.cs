@@ -19,6 +19,8 @@ internal static class ExtensionHostApiSupport
 
     /// <summary>Gets the minimum host API version whose refresh summaries expose skipped scan directories.</summary>
     internal static readonly HostApiVersion Api134MinimumHostVersion = new(1, 3, 4);
+    /// <summary>Gets the minimum host API version whose management entries expose extension-reported statuses.</summary>
+    internal static readonly HostApiVersion Api14MinimumHostVersion = new(1, 4, 0);
 
     /// <summary>Determines whether the negotiated host exposes streaming extension handlers.</summary>
     /// <param name="host">The negotiated host API version.</param>
@@ -37,6 +39,11 @@ internal static class ExtensionHostApiSupport
     /// <returns><see langword="true" /> only for a compatible API 1.3.4-or-later host in major generation 1.</returns>
     internal static bool IsApi134Supported(HostApiVersion host) =>
         ExtensionAbi.IsCompatible(Api134MinimumHostVersion, host);
+    /// <summary>Determines whether the negotiated host exposes extension-reported statuses on management entries.</summary>
+    /// <param name="host">The negotiated host API version.</param>
+    /// <returns><see langword="true" /> only for a compatible API 1.4.0-or-later host in major generation 1.</returns>
+    internal static bool IsApi14Supported(HostApiVersion host) =>
+        ExtensionAbi.IsCompatible(Api14MinimumHostVersion, host);
 
     /// <summary>Determines whether the negotiated host exposes the API 1.3 sibling bridge.</summary>
     /// <param name="host">The negotiated host API version.</param>

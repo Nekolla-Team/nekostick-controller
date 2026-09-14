@@ -337,7 +337,14 @@ const columns = computed<DataTableColumns<ExtensionRecord>>(() => [
   },
   {
     title: t('extensions.columns.loadState'), key: 'loadState',
-    render: (row) => h(NTag, { type: loadStateTagType(row.loadState) }, { default: () => row.loadState }),
+    render: (row) => h(NSpace, { size: 4, align: 'center' }, {
+      default: () => [
+        h(NTag, { type: loadStateTagType(row.loadState) }, { default: () => row.loadState }),
+        row.reportedStatusKind !== null && row.reportedStatusKind !== 'Healthy'
+          ? h(NTag, { size: 'small', type: 'warning', title: t('extensions.columns.reportedStatus', { kind: row.reportedStatusKind }) }, { default: () => row.reportedStatusCode ?? row.reportedStatusKind })
+          : null,
+      ],
+    }),
   },
   {
     title: t('extensions.columns.running'), key: 'isRunning', width: 90,

@@ -67,6 +67,15 @@ internal static class ControllerContractMapper
         CreatedAt = source.CreatedAt, UpdatedAt = source.UpdatedAt, RecordVersion = source.RecordVersion,
         IsRunning = source.IsRunning, ManifestVersion = source.ManifestVersion, ContentHash = source.ContentHash
     };
+    /// <summary>Maps an API 1.4 extension management entry, including the extension-reported status. NoInlining: touches 1.4-only members.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static ControllerExtensionRecordReadDto ToReadApi14(ExtensionManagementEntry source) => new()
+    {
+        ExtensionId = source.ExtensionId, Version = source.InstalledVersion, LoadState = (ControllerExtensionLoadState)source.LoadState,
+        CreatedAt = source.CreatedAt, UpdatedAt = source.UpdatedAt, RecordVersion = source.RecordVersion,
+        IsRunning = source.IsRunning, ManifestVersion = source.ManifestVersion, ContentHash = source.ContentHash,
+        ReportedStatusKind = source.ReportedStatusKind?.ToString(), ReportedStatusCode = source.ReportedStatusCode
+    };
 
     internal static ControllerExtensionRefreshReadDto ToRead(ExtensionRefreshSummary source) => new()
     {

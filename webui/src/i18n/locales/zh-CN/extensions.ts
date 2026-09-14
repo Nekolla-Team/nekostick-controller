@@ -8,6 +8,7 @@ export const extensions = {
     loadState: '加载状态',
     running: '运行中',
     manifestDrift: '磁盘版本 {version}',
+    reportedStatus: '扩展上报：{kind}',
     actions: '操作',
     settings: '设置',
     editSettings: '编辑设置',

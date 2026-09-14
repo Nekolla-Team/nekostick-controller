@@ -22,6 +22,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
     private ConfigurationError? _nextApplyFailure;
     private ConfigurationError? _nextManagementFailure;
     private readonly HashSet<string> _runningExtensions = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ExtensionStatus> _reportedStatusesByExtension = new(StringComparer.Ordinal);
     private readonly AsyncLocal<bool> _inRouteCallback = new();
     private readonly ConcurrentQueue<string> _scheduledReloads = new();
     private readonly ConcurrentQueue<string> _synchronousReloads = new();
@@ -168,6 +169,14 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
             else _runningExtensions.Remove(extensionId);
         }
     }
+    /// <summary>Sets the latest extension-reported status surfaced by management listings, mirroring the API 1.4 host.</summary>
+    public void SetReportedStatus(string extensionId, ExtensionStatusKind kind, string code)
+    {
+        lock (_sync)
+        {
+            _reportedStatusesByExtension[extensionId] = new ExtensionStatus(kind, code);
+        }
+    }
 
     /// <summary>Gets the extension identifiers passed to the callback-safe scheduling entry point.</summary>
     public IReadOnlyCollection<string> ScheduledReloads => _scheduledReloads.ToArray();
@@ -266,9 +275,15 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
     {
         lock (_sync)
         {
-            return _snapshot.ExtensionRecords.Select(record => new ExtensionManagementEntry(
-                record.ExtensionId, record.Version, record.LoadState, record.CreatedAt, record.UpdatedAt,
-                record.RecordVersion, _runningExtensions.Contains(record.ExtensionId), record.Version, record.ContentHash)).ToImmutableArray();
+            return _snapshot.ExtensionRecords.Select(record =>
+            {
+                var hasStatus = _reportedStatusesByExtension.TryGetValue(record.ExtensionId, out var status);
+                return new ExtensionManagementEntry(
+                    record.ExtensionId, record.Version, record.LoadState, record.CreatedAt, record.UpdatedAt,
+                    record.RecordVersion, _runningExtensions.Contains(record.ExtensionId), record.Version, record.ContentHash,
+                    hasStatus ? status.Kind : null,
+                    hasStatus ? status.Code : null);
+            }).ToImmutableArray();
         }
     }
 

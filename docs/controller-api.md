@@ -407,12 +407,15 @@ extension record 是只读信息：
   "createdAt": "2026-08-24T00:00:00.0000000+00:00",
   "updatedAt": "2026-08-24T00:10:00.0000000+00:00",
   "recordVersion": 3,
-  "contentHash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  "contentHash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "reportedStatusKind": "Degraded",
+  "reportedStatusCode": "startup.deferred_acquisition_failed"
 }
 ```
 
 `loadState` 是 `Discovered`、`Loaded`、`Stopped`、`Failed` 或 `Unloading`。
 `contentHash` 是最近一次 Host 扫描记录的扩展目录 SHA-256 摘要；尚未记录或 Host API 低于 `1.3.3` 时为 `null`。
+`reportedStatusKind` / `reportedStatusCode` 是扩展通过 Host 状态通道最近一次自行上报的状态（`Healthy` 或 `Degraded` 及自定义代码）；扩展从未上报、没有已加载的运行实例，或 Host API 低于 `1.4` 时为 `null`。
 
 `POST /v1/extensions/{id}/enable`、`POST /v1/extensions/{id}/disable`、`POST /v1/extensions/{id}/reload` 和 `DELETE /v1/extensions/{id}/record` 管理单个 extension record：启用、禁用、重载，以及级联删除记录（只删除记录，不删除磁盘上的扩展目录）。四者都要求请求 body 为空，不接受 `If-Match`，成功响应是无版本 envelope。未知 `{id}` 返回 `404 not_found`；reload 的目标 record 不处于 `Loaded` 时返回 `400 invalid_request`；Host 未提供管理能力时返回 `501 unsupported`。
 
@@ -563,7 +566,7 @@ curl --fail-with-body \
 }
 ```
 
-`host` 只在 Host API `>=1.3.3` 且 `ExtensionHostInfoSnapshot` 可用时返回对象；Host API 低于 `1.3.3`，或 Host 尚未提供有效快照时为 `null`。字段均为非敏感状态：`nodeId` 可为 `null`，`publishedConfigurationVersion` 和 `lastSnapshotStateAt` 可为 `null`；`lastSnapshotState` 的值为 `unknown`、`accepted` 或 `rejected`，`readiness` 的值为 `unknown`、`unready`、`ready` 或 `degraded`。
+`host` 只在 Host API `>=1.3.3` 且 `ExtensionHostInfoSnapshot` 可用时返回对象；Host API 低于 `1.3.3`，或 Host 尚未提供有效快照时为 `null`。字段均为非敏感状态：`nodeId` 可为 `null`，`publishedConfigurationVersion` 和 `lastSnapshotStateAt` 可为 `null`；`lastSnapshotState` 的值为 `unknown`、`accepted` 或 `rejected`，`readiness` 的值为 `unknown`、`unready`、`ready`、`degraded` 或 `publishing`（`publishing` 只在 Host API `>=1.4` 时出现，表示一次配置发布正在进行）。
 
 | 字段 | 语义 |
 | --- | --- |
@@ -577,7 +580,7 @@ curl --fail-with-body \
 | `publishedConfigurationVersion` | 发布配置版本，未知时为 `null` |
 | `lastSnapshotState` | 最近快照结果：`unknown`、`accepted` 或 `rejected` |
 | `lastSnapshotStateAt` | 最近快照状态变更时间，未知时为 `null` |
-| `readiness` | Host readiness：`unknown`、`unready`、`ready` 或 `degraded` |
+| `readiness` | Host readiness：`unknown`、`unready`、`ready`、`degraded` 或 `publishing` |
 
 
 `POST /v1/controller/reload-settings` 从 Host 重新读取 `nekolla.nekostick.controller` extension settings，并在不重新加载 extension 的情况下应用它们。请求 body 必须为空，并且必须恰好包含一个强聚合 `If-Match`；先读取任一持久化配置资源的 ETag，再提交重载：

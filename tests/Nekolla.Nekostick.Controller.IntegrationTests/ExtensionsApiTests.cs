@@ -470,4 +470,54 @@ public sealed class ExtensionsApi134Tests(ControllerApi134Fixture fixture) : ICl
         Assert.Equal("bad-json", entries[1].GetProperty("directoryName").GetString());
         Assert.Equal("JsonInvalid", entries[1].GetProperty("failureCode").GetString());
     }
+    [Fact]
+    public async Task ExtensionRecords_OmitReportedStatusBeforeApi14()
+    {
+        fixture.Host.SetReportedStatus(ControllerApiFixture.TestExtensionId, ExtensionStatusKind.Degraded, "startup.deferred_acquisition_failed");
+
+        using var client = fixture.CreateHttpClient();
+        using var member = await client.GetAsync($"/v1/extensions/{ControllerApiFixture.TestExtensionId}", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, member.StatusCode);
+        using var document = JsonDocument.Parse(await member.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        var data = document.RootElement.GetProperty("data");
+        Assert.Equal(JsonValueKind.Null, data.GetProperty("reportedStatusKind").ValueKind);
+        Assert.Equal(JsonValueKind.Null, data.GetProperty("reportedStatusCode").ValueKind);
+    }
+}
+public sealed class ExtensionsApi14Tests(ControllerApi14Fixture fixture) : IClassFixture<ControllerApi14Fixture>
+{
+    [Fact]
+    public async Task ExtensionRecords_ExposeReportedStatusOnApi14Host()
+    {
+        fixture.Host.SetReportedStatus(ControllerApiFixture.TestExtensionId, ExtensionStatusKind.Degraded, "startup.deferred_acquisition_failed");
+
+        using var client = fixture.CreateHttpClient();
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        using var member = await client.GetAsync($"/v1/extensions/{ControllerApiFixture.TestExtensionId}", cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, member.StatusCode);
+        using var memberDocument = JsonDocument.Parse(await member.Content.ReadAsStringAsync(cancellationToken));
+        var memberData = memberDocument.RootElement.GetProperty("data");
+        Assert.Equal("Degraded", memberData.GetProperty("reportedStatusKind").GetString());
+        Assert.Equal("startup.deferred_acquisition_failed", memberData.GetProperty("reportedStatusCode").GetString());
+
+        using var list = await client.GetAsync("/v1/extensions", cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, list.StatusCode);
+        using var listDocument = JsonDocument.Parse(await list.Content.ReadAsStringAsync(cancellationToken));
+        var extension = listDocument.RootElement.GetProperty("data").EnumerateArray()
+            .Single(item => item.GetProperty("extensionId").GetString() == ControllerApiFixture.TestExtensionId);
+        Assert.Equal("Degraded", extension.GetProperty("reportedStatusKind").GetString());
+    }
+
+    [Fact]
+    public async Task ExtensionRecords_ReportedStatusNullWhenNeverReported()
+    {
+        using var client = fixture.CreateHttpClient();
+        using var member = await client.GetAsync($"/v1/extensions/{ControllerApiFixture.TestExtensionId}", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, member.StatusCode);
+        using var document = JsonDocument.Parse(await member.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        var data = document.RootElement.GetProperty("data");
+        Assert.Equal(JsonValueKind.Null, data.GetProperty("reportedStatusKind").ValueKind);
+        Assert.Equal(JsonValueKind.Null, data.GetProperty("reportedStatusCode").ValueKind);
+    }
 }

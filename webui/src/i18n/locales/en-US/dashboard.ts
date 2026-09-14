@@ -59,6 +59,7 @@ export const dashboard = {
       unready: 'Unready',
       ready: 'Ready',
       degraded: 'Degraded',
+      publishing: 'Publishing',
     },
   },
   webUi: {

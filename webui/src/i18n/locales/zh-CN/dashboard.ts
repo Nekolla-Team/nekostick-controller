@@ -59,6 +59,7 @@ export const dashboard = {
       unready: '未就绪',
       ready: '就绪',
       degraded: '降级',
+      publishing: '发布中',
     },
   },
   webUi: {

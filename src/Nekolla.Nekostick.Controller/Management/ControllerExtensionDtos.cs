@@ -25,6 +25,10 @@ public sealed class ControllerExtensionRecordReadDto
     [JsonPropertyName("manifestVersion")] public string? ManifestVersion { get; init; }
     /// <summary>Optional SHA-256 digest of the installed extension content.</summary>
     [JsonPropertyName("contentHash")] public string? ContentHash { get; init; }
+    /// <summary>Latest status kind reported by the running extension; null when none was reported or the host predates API 1.4.</summary>
+    [JsonPropertyName("reportedStatusKind")] public string? ReportedStatusKind { get; init; }
+    /// <summary>Latest status code reported by the running extension; null when none was reported or the host predates API 1.4.</summary>
+    [JsonPropertyName("reportedStatusCode")] public string? ReportedStatusCode { get; init; }
 }
 
 /// <summary>Read representation of an extension directory refresh summary.</summary>

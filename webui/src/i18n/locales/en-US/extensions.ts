@@ -8,6 +8,7 @@ export const extensions = {
     loadState: 'Load state',
     running: 'Running',
     manifestDrift: 'On-disk {version}',
+    reportedStatus: 'Extension reported: {kind}',
     actions: 'Actions',
     settings: 'Settings',
     editSettings: 'Edit settings',
