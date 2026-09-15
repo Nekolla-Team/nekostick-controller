@@ -447,14 +447,14 @@ public sealed class ControllerEntrypointTests
         // Dispatch failures: every failure is answered 503, but a polling client must not flood the log.
         Assert.Equal(503, (await InvokeHandlerAsync(handler, apiKey, "GET", ControllerManagementApiContract.RoutesPath, cancellationToken: cancellationToken)).StatusCode);
         Assert.Equal(503, (await InvokeHandlerAsync(handler, apiKey, "GET", ControllerManagementApiContract.RoutesPath, cancellationToken: cancellationToken)).StatusCode);
-        Assert.Single(host.LogEntries.Where(entry =>
-            entry.Level == ExtensionLogLevel.Warning && entry.Text.Contains(ControllerManagementApiContract.RoutesPath, StringComparison.Ordinal)));
+        Assert.Single(host.LogEntries, entry =>
+            entry.Level == ExtensionLogLevel.Warning && entry.Text.Contains(ControllerManagementApiContract.RoutesPath, StringComparison.Ordinal));
 
         // The state endpoint fails through the runtime's own snapshot read and logs separately, once.
         Assert.Equal(503, (await InvokeHandlerAsync(handler, apiKey, "GET", ControllerManagementApiContract.StatePath, cancellationToken: cancellationToken)).StatusCode);
         Assert.Equal(503, (await InvokeHandlerAsync(handler, apiKey, "GET", ControllerManagementApiContract.StatePath, cancellationToken: cancellationToken)).StatusCode);
-        Assert.Single(host.LogEntries.Where(entry =>
-            entry.Level == ExtensionLogLevel.Warning && entry.Text.Contains("state endpoint", StringComparison.Ordinal)));
+        Assert.Single(host.LogEntries, entry =>
+            entry.Level == ExtensionLogLevel.Warning && entry.Text.Contains("state endpoint", StringComparison.Ordinal));
 
         await entrypoint.StopAsync(cancellationToken);
     }
