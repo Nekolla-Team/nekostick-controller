@@ -175,6 +175,7 @@ key 必须恰好出现一次，长度 `32..4096`，不能包含空白。HTTP、U
 ### 状态码
 
 | Status | envelope `code` | 含义 |
+| --- | --- | --- |
 | 200 | `ok` | GET、PATCH、PUT、runtime GET、runtime action POST、state GET 或 settings reload 成功 |
 | 201 | `ok` | POST 创建成功；带 `Location` |
 | 204 | 无 body | DELETE 成功；响应 header 带新 ETag |
