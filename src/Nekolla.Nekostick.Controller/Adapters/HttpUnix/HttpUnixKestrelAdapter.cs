@@ -4,6 +4,7 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.WebSockets;
+using System.Text;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -547,12 +548,27 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
         }
 
         if (!TryParseOutputStreamQuery(context.Request.Query, out var outputStream) ||
-            !TryCopyHeaders(context.Request.Headers, out var headers, out var apiKey) ||
-            !ControllerAdmissionLimits.TryCreateRequest(
+            !TryCopyHeaders(context.Request.Headers, out var headers, out var apiKey))
+        {
+            await WriteResponseAsync(context, ControllerManagementResponse.InvalidRequest, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var effectiveKey = ResolveOutputStreamApiKey(context.WebSockets.WebSocketRequestedProtocols, apiKey);
+        if (apiKey is null && effectiveKey is not null)
+        {
+            // Admission cross-checks the key against the canonical header channel; surface the
+            // subprotocol credential there so browser clients authenticate identically.
+            headers.Add(new KeyValuePair<string, IEnumerable<string>>(
+                ControllerManagementApiContract.ApiKeyHeaderName,
+                new[] { effectiveKey }));
+        }
+
+        if (!ControllerAdmissionLimits.TryCreateRequest(
                 _transport,
                 "GET",
                 requestPath,
-                apiKey,
+                effectiveKey,
                 headers,
                 ReadOnlyMemory<byte>.Empty,
                 out var request) ||
@@ -789,6 +805,77 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
         finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    /// <summary>
+    /// Falls back to the browser WebSocket credential channel when the API key header is absent:
+    /// browsers cannot set request headers on an upgrade, so a Web UI client presents the key as
+    /// one base64url-encoded <c>Sec-WebSocket-Protocol</c> token. Anything absent or malformed is
+    /// simply "no key" and admission answers 401.
+    /// </summary>
+    private static string? ResolveOutputStreamApiKey(IList<string> requestedProtocols, string? headerKey)
+    {
+        if (!string.IsNullOrEmpty(headerKey))
+        {
+            // The header channel wins; the subprotocol fallback only applies when it is absent.
+            return headerKey;
+        }
+
+        string? key = null;
+        foreach (var protocol in requestedProtocols)
+        {
+            if (!protocol.StartsWith(
+                    ControllerManagementApiContract.ServiceOutputKeySubProtocolPrefix,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (key is not null)
+            {
+                // Two key tokens are the duplicate-credential case, which admission rejects.
+                return null;
+            }
+
+            key = DecodeBase64UrlKey(
+                protocol[ControllerManagementApiContract.ServiceOutputKeySubProtocolPrefix.Length..]);
+        }
+
+        return key;
+    }
+
+    /// <summary>Decodes one base64url credential token; malformed input means no key.</summary>
+    private static string? DecodeBase64UrlKey(string encoded)
+    {
+        // The key contract bounds credentials to 4096 characters, so 8192 is a generous token cap.
+        if (encoded.Length == 0 || encoded.Length > 8192)
+        {
+            return null;
+        }
+
+        var base64 = encoded.Replace('-', '+').Replace('_', '/');
+        switch (base64.Length % 4)
+        {
+            case 2:
+                base64 += "==";
+                break;
+            case 3:
+                base64 += "=";
+                break;
+            case 0:
+                break;
+            default:
+                return null;
+        }
+
+        try
+        {
+            return Encoding.UTF8.GetString(Convert.FromBase64String(base64));
+        }
+        catch (FormatException)
+        {
+            return null;
         }
     }
 

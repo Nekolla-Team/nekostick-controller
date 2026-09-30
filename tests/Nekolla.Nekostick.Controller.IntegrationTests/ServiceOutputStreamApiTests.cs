@@ -29,7 +29,7 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
 
         Assert.Equal(payload, received);
         Assert.Equal(WebSocketCloseStatus.NormalClosure, socket.CloseStatus);
-        var open = Assert.Single(fixture.Host.ServiceOutputFake.Opens);
+        var open = Assert.Single(fixture.Host.ServiceOutputFake.Opens, entry => entry.ServiceId == serviceId);
         Assert.Equal(serviceId, open.ServiceId);
         Assert.Equal(ExtensionServiceOutputStream.Stdout, open.Stream);
     }
@@ -46,6 +46,56 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
 
         var open = Assert.Single(fixture.Host.ServiceOutputFake.Opens, entry => entry.ServiceId == serviceId);
         Assert.Equal(ExtensionServiceOutputStream.Stderr, open.Stream);
+    }
+
+    [Fact]
+    public async Task OutputStream_AuthenticatesViaKeySubProtocol()
+    {
+        var serviceId = Guid.CreateVersion7();
+        var payload = Encoding.UTF8.GetBytes("via-subprotocol\n");
+        fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
+            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(payload)));
+
+        using var socket = await ConnectAsync(
+            fixture.HttpPort,
+            serviceId,
+            TestContext.Current.CancellationToken,
+            useSubProtocolKey: true);
+        var received = await ReceiveUntilCloseAsync(socket, TestContext.Current.CancellationToken);
+
+        Assert.Equal(payload, received);
+    }
+
+    [Fact]
+    public async Task OutputStream_HeaderKeyWinsOverSubProtocol()
+    {
+        var serviceId = Guid.CreateVersion7();
+        var payload = Encoding.UTF8.GetBytes("header-wins\n");
+        fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
+            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(payload)));
+
+        using var socket = new ClientWebSocket();
+        socket.Options.SetRequestHeader(ControllerManagementApiContract.ApiKeyHeaderName, ControllerApiFixture.ApiKey);
+        socket.Options.AddSubProtocol(KeySubProtocol("garbage-garbage-garbage-garbage-0"));
+        await socket.ConnectAsync(
+            new Uri($"ws://127.0.0.1:{fixture.HttpPort}/v1/services/{serviceId}/output/stream"),
+            TestContext.Current.CancellationToken);
+        var received = await ReceiveUntilCloseAsync(socket, TestContext.Current.CancellationToken);
+
+        Assert.Equal(payload, received);
+    }
+
+    [Fact]
+    public async Task OutputStream_WrongKeySubProtocolRejected()
+    {
+        using var client = fixture.CreateHttpClient(withApiKey: false);
+        using var request = CreateUpgradeRequest($"/v1/services/{Guid.CreateVersion7()}/output/stream", key: null);
+        request.Headers.TryAddWithoutValidation(
+            "Sec-WebSocket-Protocol",
+            KeySubProtocol("wrong-key-wrong-key-wrong-key-00"));
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
@@ -138,15 +188,29 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
         int port,
         Guid serviceId,
         CancellationToken cancellationToken,
-        string? query = null)
+        string? query = null,
+        bool useSubProtocolKey = false)
     {
         var socket = new ClientWebSocket();
-        socket.Options.SetRequestHeader(ControllerManagementApiContract.ApiKeyHeaderName, ControllerApiFixture.ApiKey);
+        if (useSubProtocolKey)
+        {
+            // Browsers cannot set upgrade headers, so the Web UI presents the key as a subprotocol.
+            socket.Options.AddSubProtocol(KeySubProtocol(ControllerApiFixture.ApiKey));
+        }
+        else
+        {
+            socket.Options.SetRequestHeader(ControllerManagementApiContract.ApiKeyHeaderName, ControllerApiFixture.ApiKey);
+        }
+
         await socket.ConnectAsync(
             new Uri($"ws://127.0.0.1:{port}/v1/services/{serviceId}/output/stream{query}"),
             cancellationToken);
         return socket;
     }
+
+    private static string KeySubProtocol(string key) =>
+        ControllerManagementApiContract.ServiceOutputKeySubProtocolPrefix +
+        Convert.ToBase64String(Encoding.UTF8.GetBytes(key)).Replace('+', '-').Replace('/', '_').TrimEnd('=');
 
     private static HttpRequestMessage CreateUpgradeRequest(string path, string? key)
     {

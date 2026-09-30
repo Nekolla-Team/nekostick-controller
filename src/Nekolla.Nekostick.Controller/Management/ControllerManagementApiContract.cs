@@ -31,6 +31,11 @@ public static class ControllerManagementApiContract
     public const string ServiceOutputStreamPath = "/v1/services/{id}/output/stream";
     /// <summary>Query parameter selecting the output stream (stdout or stderr).</summary>
     public const string ServiceOutputStreamQueryParameter = "stream";
+    /// <summary>
+    /// <c>Sec-WebSocket-Protocol</c> token prefix that carries the base64url-encoded API key for
+    /// browser WebSocket clients, which cannot set request headers on an upgrade.
+    /// </summary>
+    public const string ServiceOutputKeySubProtocolPrefix = "nekostick.controller.key.";
     /// <summary>Path for extension operations.</summary>
     public const string ExtensionsPath = "/v1/extensions";
     /// <summary>Path of the extension directory refresh endpoint.</summary>

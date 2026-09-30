@@ -114,13 +114,16 @@ Web UI 由 controller extension settings 中的 `enableWebUi` 控制。该设置
 
 `GET /v1/services/{id}/output/stream` 把单个服务的实时 stdout/stderr 以 WebSocket 二进制帧推送给客户端：连接即订阅，断开即取消订阅。只在 HTTP/JSON 与 Unix socket 传输上提供；HostRoute 和 gRPC 无法承载 upgrade，该路径在这些传输上按普通未知资源处理（`404 not_found`）。
 
-- 握手：标准 WebSocket upgrade request，认证使用同一个 `x-nekostick-controller-key` header；认证或 dispatcher 级 admission 失败在 upgrade 之前以普通 envelope 响应（`401 unauthorized` 等）。
+- 握手：标准 WebSocket upgrade request，认证使用同一个 `x-nekostick-controller-key` header；认证或 dispatcher 级 admission 失败在 upgrade 之前以普通 envelope 响应（`401 unauthorized` 等）。无法设置 upgrade header 的浏览器客户端可以改为提供一个 `Sec-WebSocket-Protocol` token：`nekostick.controller.key.<base64url(API key)>`；header 存在时优先于该 token，服务器不会回声任何子协议。
 - 请求形状检查先于认证执行：非 upgrade 的普通 GET、`stream` 取值非法或 header 超限时直接返回 transport-level 的空 body `400`（没有 envelope，与第 4 节末尾的 admission 约定一致）；因此同时缺 key 且形状非法的请求得到 `400` 而非 `401`。
 - query：`?stream=stdout`（缺省默认值）或 `?stream=stderr`；其他值按上面的空 body `400` 处理。
 - 数据帧：每条二进制 message 承载一次读取的原始字节，不做行缓冲也不做文本转码；客户端不应假设帧边界对齐行边界或单次写调用。
 - 语义：流绑定当前进程代次，只推送订阅之后产生的新输出，不回放历史。Host 侧缓冲有界，生产速度超过消费速度时可能静默丢弃字节，因此它适合实时观察，不能当作可靠的日志传输通道。
 - 关闭码：`1000` 表示进程代次结束（输出流 EOF）；`1001` 表示管理会话结束（API key 轮换）或传输正在停止；`1011` 表示 Host 输出流故障。客户端主动关闭连接即取消订阅，Host 订阅随连接释放。
 - 错误（upgrade 之前）：Host API 低于 `1.4.0` 或能力缺失返回 `501 unsupported`；未知 service 返回 `404 not_found`；service 没有可订阅的运行中输出泵返回 `409 not_running`；Host bridge 不可用返回 `503 unavailable`，这些都是普通 envelope。dispatcher 内部异常则返回空 body 的 `503`。
+
+
+内嵌 Web UI 的服务运行状态页提供「输出」入口：在独立的浏览器窗口中通过上面的子协议认证通道查看实时输出，可切换 stdout/stderr。HostRoute 承载的页面无法使用该端点（该传输不支持 WebSocket），查看器会显示连接失败提示。
 
 ## 3. 认证与请求边界
 
