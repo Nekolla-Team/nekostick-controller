@@ -112,6 +112,9 @@ importers:
       '@tanstack/vue-query':
         specifier: ^5
         version: 5.102.3(vue@3.5.41(typescript@5.9.3))
+      echarts:
+        specifier: ^6.1.0
+        version: 6.1.0
       monaco-editor:
         specifier: ^0.56.0
         version: 0.56.0
@@ -458,6 +461,9 @@ packages:
   dompurify@3.4.8:
     resolution: {integrity: sha512-yb1cEmaOum7wFvOCSQxyfgVlv5D47Rc30iZWoMpbDIWTnJ6grDDQyu2KFJzB2k7u0pMuJcQ1zphH//fFnw2tjQ==}
 
+  echarts@6.1.0:
+    resolution: {integrity: sha512-q0yaFPggC9FUdsWH4blavRWFmxdrIodbkoKNAjJudAI6CA9gNPxHtV2RcZNEepZVlk4yvBYkOkbk6HIVpIyHZA==}
+
   entities@7.0.1:
     resolution: {integrity: sha512-TWrgLOFUQTH994YUyl1yT4uyavY5nNB5muff+RtWaqNVCAK408b5ZnnbNAUEWLTCpum9w6arT70i1XdQ4UeOPA==}
     engines: {node: '>=0.12'}
@@ -668,6 +674,9 @@ packages:
   treemate@0.3.11:
     resolution: {integrity: sha512-M8RGFoKtZ8dF+iwJfAJTOH/SM4KluKOKRJpjCMhI8bG3qB74zrFoArKZ62ll0Fr3mqkMJiQOmWYkdYgDeITYQg==}
 
+  tslib@2.3.0:
+    resolution: {integrity: sha512-N82ooyxVNm6h1riLCoyS9e3fuJ3AMG2zIZs2Gd1ATcSFjSA23Q0fzjjZeh0jbJvWVDZ0cJT8yaNNaaXHzueNjg==}
+
   typescript@5.9.3:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
     engines: {node: '>=14.17'}
@@ -828,6 +837,9 @@ packages:
         optional: true
       utf-8-validate:
         optional: true
+
+  zrender@6.1.0:
+    resolution: {integrity: sha512-oEGMDB6pOP2S6OwRR4PdVv610zrjnA3Bh+JnSG12fYJlBKjtNAoEb5fSUoCOOINlH96I2fU38/A2UpRKs67xYQ==}
 
 snapshots:
 
@@ -1113,6 +1125,11 @@ snapshots:
     optionalDependencies:
       '@types/trusted-types': 2.0.7
 
+  echarts@6.1.0:
+    dependencies:
+      tslib: 2.3.0
+      zrender: 6.1.0
+
   entities@7.0.1: {}
 
   es-module-lexer@2.3.2: {}
@@ -1301,6 +1318,8 @@ snapshots:
 
   treemate@0.3.11: {}
 
+  tslib@2.3.0: {}
+
   typescript@5.9.3: {}
 
   undici-types@8.3.0: {}
@@ -1400,3 +1419,7 @@ snapshots:
       stackback: 0.0.2
 
   ws@8.21.3: {}
+
+  zrender@6.1.0:
+    dependencies:
+      tslib: 2.3.0

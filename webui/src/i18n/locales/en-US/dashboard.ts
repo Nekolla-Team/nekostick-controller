@@ -1,6 +1,6 @@
 export const dashboard = {
   title: 'Dashboard',
-  subtitle: 'View controller listener status and configuration overview.',
+  subtitle: 'Configuration overview and controller telemetry.',
   reload: {
     button: 'Reload settings',
     success: 'Settings reloaded',
@@ -8,19 +8,6 @@ export const dashboard = {
     completed: {
       bootstrap: 'Reload completed: the controller remains in bootstrap mode.',
       configured: 'Reload completed: the controller entered configured mode.',
-    },
-  },
-  listener: {
-    title: 'Listener status',
-    labels: {
-      hostRoute: 'HostRoute',
-      httpJson: 'HTTP / JSON',
-      grpc: 'gRPC',
-      unixSocket: 'Unix socket',
-    },
-    state: {
-      running: 'Running',
-      enabledNotRunning: 'Enabled but not running',
     },
   },
   mode: {
@@ -62,9 +49,23 @@ export const dashboard = {
       publishing: 'Publishing',
     },
   },
-  webUi: {
-    title: 'Web UI',
-    embedded: 'Embedded',
-    enabled: 'Enabled',
+  metrics: {
+    memory: 'Memory',
+    cpu: 'CPU usage',
+    series: {
+      workingSet: 'Process working set',
+      managedHeap: 'Managed heap',
+      hostUsed: 'Host memory used',
+      processCpu: 'Controller process',
+      hostCpu: 'Host CPU',
+    },
+    tiles: {
+      uptime: 'Uptime',
+      threads: 'Threads',
+      handles: 'Open handles',
+      gcCollections: 'GC collections (Gen0/1/2)',
+      gcPause: 'GC pause share',
+      allocated: 'Total allocated',
+    },
   },
 } as const

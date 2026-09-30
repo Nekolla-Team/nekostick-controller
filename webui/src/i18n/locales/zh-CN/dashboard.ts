@@ -1,6 +1,6 @@
 export const dashboard = {
   title: '仪表盘',
-  subtitle: '查看控制器 listener 状态和配置概览。',
+  subtitle: '配置概览与 controller 遥测。',
   reload: {
     button: '重载设置',
     success: '设置已重载',
@@ -8,19 +8,6 @@ export const dashboard = {
     completed: {
       bootstrap: '重载完成：控制器仍处于引导模式。',
       configured: '重载完成：控制器已进入正式模式。',
-    },
-  },
-  listener: {
-    title: 'Listener 状态',
-    labels: {
-      hostRoute: 'HostRoute',
-      httpJson: 'HTTP / JSON',
-      grpc: 'gRPC',
-      unixSocket: 'Unix socket',
-    },
-    state: {
-      running: '运行中',
-      enabledNotRunning: '已启用但未运行',
     },
   },
   mode: {
@@ -62,9 +49,23 @@ export const dashboard = {
       publishing: '发布中',
     },
   },
-  webUi: {
-    title: 'Web UI',
-    embedded: '已嵌入',
-    enabled: '已启用',
+  metrics: {
+    memory: '内存',
+    cpu: 'CPU 占用',
+    series: {
+      workingSet: '进程工作集',
+      managedHeap: '托管堆',
+      hostUsed: '主机已用内存',
+      processCpu: '控制器进程',
+      hostCpu: '主机 CPU',
+    },
+    tiles: {
+      uptime: '运行时长',
+      threads: '线程数',
+      handles: '打开句柄',
+      gcCollections: 'GC 回收 (Gen0/1/2)',
+      gcPause: 'GC 暂停占比',
+      allocated: '托管堆累计分配',
+    },
   },
 } as const

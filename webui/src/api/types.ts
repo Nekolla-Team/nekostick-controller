@@ -341,6 +341,38 @@ export interface ControllerState {
   webUi: ControllerWebUiState;
 }
 
+export interface ControllerRuntimeTelemetry {
+  managedHeapBytes: number;
+  heapCommittedBytes: number;
+  totalAllocatedBytes: number;
+  gen0Collections: number;
+  gen1Collections: number;
+  gen2Collections: number;
+  pauseTimePercentage: number;
+  threadCount: number;
+  handleCount: number | null;
+}
+
+export interface ControllerProcessTelemetry {
+  workingSetBytes: number;
+  privateMemoryBytes: number | null;
+  cpuPercent: number | null;
+}
+
+export interface ControllerHostTelemetry {
+  memoryTotalBytes: number;
+  memoryUsedBytes: number;
+  cpuPercent: number | null;
+}
+
+export interface ControllerTelemetry {
+  timestampUnixMs: number;
+  uptimeSeconds: number;
+  runtime: ControllerRuntimeTelemetry;
+  process: ControllerProcessTelemetry;
+  host: ControllerHostTelemetry | null;
+}
+
 export interface ExtensionRecord {
   extensionId: string;
   version: string;
