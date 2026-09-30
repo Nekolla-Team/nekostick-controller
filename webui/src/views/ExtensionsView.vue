@@ -20,6 +20,7 @@ import {
 } from 'naive-ui'
 import type { DataTableColumns, DropdownOption } from 'naive-ui'
 import ApiErrorAlert from '../components/ApiErrorAlert.vue'
+import JsonEditor from '../components/JsonEditor.vue'
 import { IconDots } from '../components/icons'
 import {
   cancelExtensionPackageUpload,
