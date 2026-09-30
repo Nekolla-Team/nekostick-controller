@@ -1,5 +1,6 @@
 export const controllerConfig = {
   title: '控制器配置',
+  subtitle: '监听器、连接方式与 API 密钥。',
   webUi: 'Web UI',
   preventSelfDisable: '阻止禁用自身',
   webUiDisabledWarning: '关闭 Web UI 后，设置重载完成时本页面将不再被提供；当前已打开的页面可继续使用，API 不受影响。',
@@ -20,7 +21,6 @@ export const controllerConfig = {
   bothDisabledWarning: '两种连接方式都将被禁用, 保存后此页面将无法再与控制器通信。',
   bothDisabledConfirm: '两种连接方式都将被禁用, 确认保存?',
   save: '保存并重连',
-  cancel: '取消',
   saved: '控制器配置已保存',
   reconnectFailed: '配置已保存, 但自动重连失败, 请检查连接设置',
   loadFailed: '加载控制器配置失败',
@@ -29,4 +29,20 @@ export const controllerConfig = {
   pathRequired: '启用 Host 路由时必须填写路径',
   pathInvalid: '路径必须以 / 开头, 不能以 / 结尾, 且不能包含 //、? 或 #',
   apiKeyTooShort: '启用任意连接方式时, API 密钥至少需要 32 个字符',
+  status: {
+    title: '运行状态',
+    webUi: 'Web UI',
+    embedded: '已嵌入',
+    enabled: '已启用',
+    listeners: {
+      hostRoute: 'HostRoute',
+      httpJson: 'HTTP / JSON',
+      grpc: 'gRPC',
+      unixSocket: 'Unix socket',
+    },
+    listenerState: {
+      running: '运行中',
+      enabledNotRunning: '已启用但未运行',
+    },
+  },
 } as const

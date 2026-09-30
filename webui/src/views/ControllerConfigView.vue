@@ -1,22 +1,23 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import {
   NAlert,
   NButton,
   NCard,
+  NDescriptions,
+  NDescriptionsItem,
   NDynamicInput,
   NForm,
   NFormItem,
   NInput,
   NInputNumber,
-  NModal,
   NPopconfirm,
-  NSpace,
   NSpin,
   NSwitch,
+  NTag,
   useMessage,
 } from 'naive-ui'
-import { useQueryClient } from '@tanstack/vue-query'
+import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import { ApiClientError } from '../api/client'
 import { getRoot } from '../api/resources/root'
 import {
@@ -24,20 +25,17 @@ import {
   getSettings,
   putSettings,
 } from '../api/resources/extensions'
-import { reloadSettings } from '../api/resources/controller'
+import { getState, reloadSettings } from '../api/resources/controller'
 import { globalSettingsPath } from '../api/resources/globalSettings'
 import { useCas } from '../composables/useCas'
 import { connection, saveConnection, stageConnection } from '../stores/connection'
 import { t } from '../i18n'
-import type { JsonObject, JsonValue } from '../api/types'
+import type { ControllerListenersState, JsonObject, JsonValue } from '../api/types'
 
 const controllerExtensionId = 'nekolla.nekostick.controller'
 const settingsPath = extensionSettingsPath(controllerExtensionId)
 
 type ConnectionMethod = 'http' | 'hostroute'
-
-const props = defineProps<{ show: boolean }>()
-const emit = defineEmits<{ 'update:show': [value: boolean] }>()
 
 const message = useMessage()
 const queryClient = useQueryClient()
@@ -59,10 +57,6 @@ const preventSelfDisable = ref(false)
 const hostRoutePath = ref('')
 const apiKey = ref('')
 let originalSettings: JsonObject = {}
-
-function close(): void {
-  emit('update:show', false)
-}
 
 function isObject(value: JsonValue | undefined): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -118,12 +112,33 @@ async function load(): Promise<void> {
   }
 }
 
-watch(
-  () => props.show,
-  (show) => {
-    if (show) void load()
-  },
+onMounted(() => {
+  void load()
+})
+
+const stateQuery = useQuery({
+  queryKey: ['controller', 'state'],
+  queryFn: getState,
+  refetchInterval: 5000,
+})
+const controllerState = computed(() => stateQuery.data.value)
+
+const listenerKeys: Array<keyof ControllerListenersState> = ['hostRoute', 'httpJson', 'grpc', 'unixSocket']
+const statusListeners = computed(() =>
+  listenerKeys.map((key) => ({ key, value: controllerState.value?.listeners[key] })),
 )
+
+function listenerTone(enabled: boolean, running: boolean): 'ok' | 'warn' | 'idle' {
+  if (running) return 'ok'
+  if (enabled) return 'warn'
+  return 'idle'
+}
+
+function listenerStateText(enabled: boolean, running: boolean): string {
+  if (running) return t('controllerConfig.status.listenerState.running')
+  if (enabled) return t('controllerConfig.status.listenerState.enabledNotRunning')
+  return t('common.disabledState')
+}
 
 function generateApiKey(): void {
   const bytes = new Uint8Array(48)
@@ -298,16 +313,14 @@ async function save(): Promise<void> {
     )
     try {
       await cas.run(globalSettingsPath, (ifMatch) => reloadSettings(ifMatch))
-    } catch (error: unknown) {
-      // Reloading recycles the transport carrying this very request; a dropped
-      // connection here means the reload likely applied, so proceed to reconnect.
-      const ignorable =
-        error instanceof ApiClientError && (error.kind === 'network' || error.kind === 'unavailable')
-      if (!ignorable) throw error
+    } catch {
+      // The settings PUT already persisted; the reload request crosses the transport it
+      // recycles (through the HostRoute it may surface as a bare 400), so its response says
+      // nothing about whether the reload applied. Proceed to reconnect, which probes the
+      // new endpoint for real.
     }
     if (await reconnect(next)) {
       message.success(t('controllerConfig.saved'))
-      close()
     } else {
       errorMessage.value = t('controllerConfig.reconnectFailed')
     }
@@ -320,29 +333,79 @@ async function save(): Promise<void> {
 </script>
 
 <template>
-  <n-modal :show="show" @update:show="emit('update:show', $event)">
-    <n-card
-      class="controller-config-card"
-      :title="t('controllerConfig.title')"
-      closable
-      @close="close"
-    >
-      <n-spin :show="loading">
-        <n-form label-placement="top">
+  <main class="page-stack page-stack--narrow">
+    <header class="page-heading">
+      <div>
+        <h1>{{ t('controllerConfig.title') }}</h1>
+        <p>{{ t('controllerConfig.subtitle') }}</p>
+      </div>
+      <n-popconfirm
+        v-if="!enableHttp && !enableHostRoute"
+        :positive-text="t('common.save')"
+        :negative-text="t('common.cancel')"
+        @positive-click="save"
+      >
+        <template #trigger>
+          <n-button type="error" :loading="saving">
+            {{ t('controllerConfig.save') }}
+          </n-button>
+        </template>
+        {{ t('controllerConfig.bothDisabledConfirm') }}
+      </n-popconfirm>
+      <n-button v-else type="primary" :loading="saving" :disabled="loading" @click="save">
+        {{ t('controllerConfig.save') }}
+      </n-button>
+    </header>
+
+    <n-spin :show="stateQuery.isLoading.value">
+      <n-card :title="t('controllerConfig.status.title')">
+        <n-descriptions bordered :column="1" label-placement="left" size="small">
+          <n-descriptions-item
+            v-for="listener in statusListeners"
+            :key="listener.key"
+            :label="t(`controllerConfig.status.listeners.${listener.key}`)"
+          >
+            <span class="status-value">
+              <span
+                class="status-dot"
+                :class="`status-dot--${listener.value ? listenerTone(listener.value.enabled, listener.value.running) : 'idle'}`"
+              />
+              {{ listener.value ? listenerStateText(listener.value.enabled, listener.value.running) : t('common.unknown') }}
+            </span>
+          </n-descriptions-item>
+          <n-descriptions-item v-if="controllerState" :label="t('controllerConfig.status.webUi')">
+            <n-tag :type="controllerState.webUi.embedded ? 'success' : 'default'" size="small">
+              {{ t('controllerConfig.status.embedded') }}
+            </n-tag>
+            <n-tag :type="controllerState.webUi.enabled ? 'success' : 'default'" size="small" class="status-tag-gap">
+              {{ t('controllerConfig.status.enabled') }}
+            </n-tag>
+          </n-descriptions-item>
+        </n-descriptions>
+      </n-card>
+    </n-spin>
+
+    <n-spin :show="loading">
+      <n-card>
+        <n-form label-placement="left" label-align="left" label-width="240">
           <n-form-item>
             <template #label>{{ t('controllerConfig.webUi') }}</template>
             <n-switch v-model:value="enableWebUi" />
           </n-form-item>
-          <n-alert v-if="!enableWebUi" type="warning" :show-icon="true">
-            {{ t('controllerConfig.webUiDisabledWarning') }}
-          </n-alert>
+          <n-form-item v-if="!enableWebUi">
+            <n-alert type="warning" :show-icon="true">
+              {{ t('controllerConfig.webUiDisabledWarning') }}
+            </n-alert>
+          </n-form-item>
           <n-form-item>
             <template #label>{{ t('controllerConfig.preventSelfDisable') }}</template>
             <n-switch v-model:value="preventSelfDisable" />
           </n-form-item>
-          <n-alert v-if="preventSelfDisable" type="info" :show-icon="true">
-            {{ t('controllerConfig.preventSelfDisableHint') }}
-          </n-alert>
+          <n-form-item v-if="preventSelfDisable">
+            <n-alert type="info" :show-icon="true">
+              {{ t('controllerConfig.preventSelfDisableHint') }}
+            </n-alert>
+          </n-form-item>
           <n-form-item>
             <template #label>{{ t('controllerConfig.httpListener') }}</template>
             <n-switch v-model:value="enableHttp" />
@@ -398,16 +461,18 @@ async function save(): Promise<void> {
             <n-input v-model:value="hostRoutePath" placeholder="/controller" />
           </n-form-item>
           <n-form-item :label="t('controllerConfig.apiKey')">
-            <n-input
-              v-model:value="apiKey"
-              type="password"
-              show-password-on="click"
-              autocomplete="off"
-            />
+            <div class="api-key-row">
+              <n-input
+                v-model:value="apiKey"
+                type="password"
+                show-password-on="click"
+                autocomplete="off"
+              />
+              <n-button @click="generateApiKey">
+                {{ t('controllerConfig.apiKeyGenerate') }}
+              </n-button>
+            </div>
           </n-form-item>
-          <n-button size="small" @click="generateApiKey">
-            {{ t('controllerConfig.apiKeyGenerate') }}
-          </n-button>
           <n-alert
             v-if="!enableHttp && !enableHostRoute"
             type="error"
@@ -425,39 +490,12 @@ async function save(): Promise<void> {
             {{ errorMessage }}
           </n-alert>
         </n-form>
-      </n-spin>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="close">{{ t('controllerConfig.cancel') }}</n-button>
-          <n-popconfirm
-            v-if="!enableHttp && !enableHostRoute"
-            :positive-text="t('common.save')"
-            :negative-text="t('common.cancel')"
-            @positive-click="save"
-          >
-            <template #trigger>
-              <n-button type="error" :loading="saving">
-                {{ t('controllerConfig.save') }}
-              </n-button>
-            </template>
-            {{ t('controllerConfig.bothDisabledConfirm') }}
-          </n-popconfirm>
-          <n-button v-else type="primary" :loading="saving" @click="save">
-            {{ t('controllerConfig.save') }}
-          </n-button>
-        </n-space>
-      </template>
-    </n-card>
-  </n-modal>
+      </n-card>
+    </n-spin>
+  </main>
 </template>
 
 <style scoped>
-.controller-config-card {
-  box-sizing: border-box;
-  max-width: calc(100vw - 32px);
-  width: 520px;
-}
-
 .both-disabled-warning {
   margin-top: 16px;
 }
@@ -465,5 +503,21 @@ async function save(): Promise<void> {
 .config-error {
   margin-top: 16px;
   white-space: pre-line;
+}
+
+.api-key-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.status-value {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+}
+
+.status-tag-gap {
+  margin-left: 8px;
 }
 </style>

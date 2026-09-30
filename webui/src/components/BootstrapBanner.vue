@@ -6,7 +6,6 @@ import { useRouter } from 'vue-router'
 import { t } from '../i18n'
 
 const props = defineProps<{ state: ControllerState | undefined }>()
-const emit = defineEmits<{ 'edit-config': [] }>()
 const router = useRouter()
 const visible = computed(() => props.state?.bootstrapMode === true)
 
@@ -25,7 +24,7 @@ function open(path: string): void {
   >
     {{ t('app.bootstrapBanner.body') }}
     <n-space>
-      <n-button size="small" type="warning" @click="emit('edit-config')">
+      <n-button size="small" type="warning" @click="open('/controller-config')">
         {{ t('app.bootstrapBanner.editControllerConfig') }}
       </n-button>
       <n-button size="small" @click="open('/connect')">

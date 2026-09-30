@@ -1,5 +1,6 @@
 export const controllerConfig = {
   title: 'Controller Configuration',
+  subtitle: 'Listeners, connection methods, and the API key.',
   webUi: 'Web UI',
   preventSelfDisable: 'Prevent self-disable',
   webUiDisabledWarning:
@@ -21,7 +22,6 @@ export const controllerConfig = {
   bothDisabledWarning: 'Both connection methods will be disabled; this page will no longer be able to reach the controller after saving.',
   bothDisabledConfirm: 'Both connection methods will be disabled. Save anyway?',
   save: 'Save & reconnect',
-  cancel: 'Cancel',
   saved: 'Controller configuration saved',
   reconnectFailed: 'Configuration saved, but automatic reconnection failed. Check the connection settings.',
   loadFailed: 'Failed to load the controller configuration',
@@ -30,4 +30,20 @@ export const controllerConfig = {
   pathRequired: 'A path is required when the Host route is enabled',
   pathInvalid: 'The path must start with /, must not end with /, and must not contain //, ?, or #',
   apiKeyTooShort: 'The API key must be at least 32 characters when any connection method is enabled',
+  status: {
+    title: 'Runtime status',
+    webUi: 'Web UI',
+    embedded: 'Embedded',
+    enabled: 'Enabled',
+    listeners: {
+      hostRoute: 'HostRoute',
+      httpJson: 'HTTP / JSON',
+      grpc: 'gRPC',
+      unixSocket: 'Unix socket',
+    },
+    listenerState: {
+      running: 'Running',
+      enabledNotRunning: 'Enabled but not running',
+    },
+  },
 } as const

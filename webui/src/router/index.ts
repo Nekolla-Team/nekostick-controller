@@ -49,6 +49,11 @@ const routes: RouteRecordRaw[] = [
     component: () => import('../views/GlobalSettingsView.vue'),
   },
   {
+    path: '/controller-config',
+    name: 'controller-config',
+    component: () => import('../views/ControllerConfigView.vue'),
+  },
+  {
     path: '/:pathMatch(.*)*',
     redirect: '/',
   },

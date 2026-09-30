@@ -1,5 +1,4 @@
-import { computed, reactive } from 'vue'
-import { t } from '../i18n'
+import { reactive } from 'vue'
 
 const STORAGE_KEY = 'nekostick.webui.connection'
 
@@ -95,16 +94,3 @@ export function clearConnection(): void {
     // Clearing in-memory state is sufficient when browser storage is unavailable.
   }
 }
-
-export const connectionLabel = computed(() => {
-  const { apiKey, baseUrl } = connection
-  if (!apiKey) return t('common.notConnected')
-  if (!baseUrl) return t('common.connected')
-  let origin = baseUrl
-  try {
-    origin = new URL(baseUrl).origin
-  } catch {
-    // Keep the raw value when the configured address is not a valid URL.
-  }
-  return t('common.connectedTo', { baseUrl: origin })
-})
