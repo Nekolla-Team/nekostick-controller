@@ -9,9 +9,11 @@ import {
   NDataTable,
   NDrawer,
   NDrawerContent,
+  NDropdown,
   NDynamicTags,
   NForm,
   NFormItem,
+  NIcon,
   NInput,
   NInputNumber,
   NModal,
@@ -22,9 +24,11 @@ import {
   NSpin,
   NSwitch,
   NTag,
+  useDialog,
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import ApiErrorAlert from '../components/ApiErrorAlert.vue'
+import { IconDots } from '../components/icons'
 import {
   createService,
   deleteEnvironment,
@@ -230,6 +234,18 @@ const deleteMutation = useMutation({
   },
 })
 
+const dialog = useDialog()
+
+function confirmDelete(service: ServiceDto): void {
+  dialog.warning({
+    title: t('common.delete'),
+    content: t('services.confirm.deleteService'),
+    positiveText: t('common.delete'),
+    negativeText: t('common.cancel'),
+    onPositiveClick: () => deleteMutation.mutate(service.id),
+  })
+}
+
 function save(): void {
   formError.value = null
   if (!form.fileName.trim()) {
@@ -348,17 +364,29 @@ const columns = computed<DataTableColumns<ServiceDto>>(() => [
   },
   { title: t('services.columns.healthCheck'), key: 'healthCheck', render: healthText },
   {
-    title: t('common.actions'), key: 'actions', width: 260,
-    render: (row) => h(NSpace, { size: 'small' }, {
+    title: t('common.actions'),
+    key: 'actions',
+    width: 120,
+    render: (row) => h(NSpace, { size: 4, wrap: false, align: 'center' }, {
       default: () => [
         h(NButton, { size: 'small', onClick: () => openEdit(row) }, { default: () => t('common.edit') }),
-        h(NButton, { size: 'small', onClick: () => openEnvironment(row) }, { default: () => t('services.actions.environmentVariables') }),
-        h(NButton, { size: 'small', onClick: () => void router.push(`/services/${encodeURIComponent(row.id)}/runtime`) }, { default: () => t('services.actions.runtimeStatus') }),
-        h(NPopconfirm, {
-          positiveText: t('common.delete'), negativeText: t('common.cancel'), onPositiveClick: () => deleteMutation.mutate(row.id),
+        h(NDropdown, {
+          trigger: 'click',
+          options: [
+            { label: t('services.actions.environmentVariables'), key: 'environment' },
+            { label: t('services.actions.runtimeStatus'), key: 'runtime' },
+            { type: 'divider', key: 'divider' },
+            { label: t('common.delete'), key: 'delete' },
+          ],
+          onSelect: (key: string) => {
+            if (key === 'environment') openEnvironment(row)
+            else if (key === 'runtime') void router.push(`/services/${encodeURIComponent(row.id)}/runtime`)
+            else if (key === 'delete') confirmDelete(row)
+          },
         }, {
-          trigger: () => h(NButton, { size: 'small', type: 'error', loading: deleteMutation.isPending.value }, { default: () => t('common.delete') }),
-          default: () => t('services.confirm.deleteService'),
+          default: () => h(NButton, { size: 'small', quaternary: true, 'aria-label': t('common.more') }, {
+            icon: () => h(NIcon, { size: 16 }, { default: () => h(IconDots) }),
+          }),
         }),
       ],
     }),
@@ -485,29 +513,6 @@ const columns = computed<DataTableColumns<ServiceDto>>(() => [
 </template>
 
 <style scoped>
-.page-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  margin: 0 auto;
-  max-width: 1280px;
-}
-
-.page-heading {
-  align-items: center;
-  display: flex;
-  justify-content: space-between;
-}
-
-h1 {
-  margin: 0;
-}
-
-.page-heading p {
-  color: var(--n-text-color-3);
-  margin: 6px 0 0;
-}
-
 .form-modal {
   display: flex;
   flex-direction: column;
@@ -539,12 +544,5 @@ h1 {
 .preset-label {
   color: var(--n-text-color-3);
   font-size: 13px;
-}
-
-.field-hint {
-  color: var(--n-text-color-3);
-  flex: 0 0 100%;
-  font-size: 12px;
-  margin: 4px 0 0;
 }
 </style>

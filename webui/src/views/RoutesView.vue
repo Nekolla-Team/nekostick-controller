@@ -570,29 +570,6 @@ const columns = computed<DataTableColumns<RouteDto>>(() => [
 </template>
 
 <style scoped>
-.page-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  margin: 0 auto;
-  max-width: 1280px;
-}
-
-.page-heading {
-  align-items: center;
-  display: flex;
-  justify-content: space-between;
-}
-
-h1 {
-  margin: 0;
-}
-
-.page-heading p {
-  color: var(--n-text-color-3);
-  margin: 6px 0 0;
-}
-
 .form-modal {
   display: flex;
   flex-direction: column;
@@ -629,14 +606,6 @@ h1 {
   color: var(--n-text-color-3);
   font-size: 13px;
 }
-
-.field-hint {
-  color: var(--n-text-color-3);
-  flex: 0 0 100%;
-  font-size: 12px;
-  margin: 4px 0 0;
-}
-
 .rewrite-list {
   width: 100%;
 }

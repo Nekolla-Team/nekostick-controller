@@ -8,13 +8,6 @@ export const app = {
     globalSettings: '全局设置',
     connect: '连接设置',
   },
-  connection: {
-    modalTitle: '连接设置',
-    address: '连接地址: {label}',
-    hint: 'API key 仅保存在本地连接设置中, 不会显示在此处。',
-    open: '打开连接设置',
-    editControllerConfig: '修改控制器配置',
-  },
   theme: {
     label: '主题',
     light: '亮色',

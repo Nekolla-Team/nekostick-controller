@@ -105,7 +105,7 @@ function openOutputWindow(): void {
 
 
 <template>
-  <main class="page-stack">
+  <main class="page-stack page-stack--narrow">
     <header class="page-heading">
       <div>
         <h1>{{ t('serviceRuntime.title') }}</h1>
@@ -179,23 +179,6 @@ function openOutputWindow(): void {
 </template>
 
 <style scoped>
-.page-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  margin: 0 auto;
-  max-width: 960px;
-}
-
-.page-heading {
-  align-items: center;
-  display: flex;
-  justify-content: space-between;
-}
-
-h1 {
-  margin: 0;
-}
 
 .service-id {
   color: var(--n-text-color-3);

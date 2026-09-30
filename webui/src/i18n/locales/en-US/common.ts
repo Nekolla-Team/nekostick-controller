@@ -3,6 +3,7 @@ export const common = {
   enabledState: 'Enabled',
   disabledState: 'Disabled',
   actions: 'Actions',
+  more: 'More actions',
   edit: 'Edit',
   delete: 'Delete',
   cancel: 'Cancel',
@@ -13,5 +14,4 @@ export const common = {
   unknown: 'Unknown',
   notConnected: 'Not connected',
   connected: 'Connected',
-  connectedTo: 'Connected to {baseUrl}',
 } as const

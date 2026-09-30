@@ -3,6 +3,7 @@ import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query'
 import App from './App.vue'
 import router from './router'
 import { loadConnection } from './stores/connection'
+import './styles.css'
 import { loadTheme } from './stores/theme'
 import { loadLocale } from './i18n'
 

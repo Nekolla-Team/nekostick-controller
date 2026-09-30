@@ -3,6 +3,7 @@ export const common = {
   enabledState: '已启用',
   disabledState: '已禁用',
   actions: '操作',
+  more: '更多操作',
   edit: '编辑',
   delete: '删除',
   cancel: '取消',
@@ -13,5 +14,4 @@ export const common = {
   unknown: '未知',
   notConnected: '未连接',
   connected: '已连接',
-  connectedTo: '已连接 {baseUrl}',
 } as const

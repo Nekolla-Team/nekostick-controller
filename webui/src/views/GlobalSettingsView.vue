@@ -166,7 +166,7 @@ function save(): void {
 </script>
 
 <template>
-  <main class="page-stack">
+  <main class="page-stack page-stack--narrow">
     <header class="page-heading">
       <div>
         <h1>{{ t('globalSettings.title') }}</h1>
@@ -251,29 +251,6 @@ function save(): void {
 </template>
 
 <style scoped>
-.page-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  margin: 0 auto;
-  max-width: 960px;
-}
-
-.page-heading {
-  align-items: center;
-  display: flex;
-  justify-content: space-between;
-}
-
-h1 {
-  margin: 0;
-}
-
-.page-heading p {
-  color: var(--n-text-color-3);
-  margin: 6px 0 0;
-}
-
 .settings-card + .settings-card {
   margin-top: 16px;
 }
@@ -289,10 +266,5 @@ h1 {
   flex-direction: column;
   gap: 4px;
   width: 100%;
-}
-
-.field-hint {
-  color: var(--n-text-color-3);
-  font-size: 12px;
 }
 </style>

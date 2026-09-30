@@ -8,13 +8,6 @@ export const app = {
     globalSettings: 'Global Settings',
     connect: 'Connection',
   },
-  connection: {
-    modalTitle: 'Connection',
-    address: 'Address: {label}',
-    hint: 'The API key is only stored in the local connection settings and is never shown here.',
-    open: 'Open connection settings',
-    editControllerConfig: 'Edit controller configuration',
-  },
   theme: {
     label: 'Theme',
     light: 'Light',

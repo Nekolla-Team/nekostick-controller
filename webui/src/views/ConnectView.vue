@@ -10,10 +10,12 @@ import {
   NFormItem,
   NInput,
   NSpace,
+  NIcon,
 } from 'naive-ui'
 import { ApiClientError, defaultControllerBaseUrl } from '../api/client'
 import { getRoot } from '../api/resources/root'
 import { connection, saveConnection, stageConnection } from '../stores/connection'
+import { IconCatHead } from '../components/icons'
 import { t } from '../i18n'
 
 const router = useRouter()
@@ -72,7 +74,12 @@ async function handleSubmit(): Promise<void> {
 
 <template>
   <main class="connect-page">
-    <n-card class="connect-card" :title="t('connect.title')">
+    <div class="connect-panel">
+      <div class="connect-brand">
+        <div class="connect-brand-mark"><n-icon :size="26"><IconCatHead /></n-icon></div>
+        <h1 class="connect-brand-name">Nekostick Controller</h1>
+      </div>
+      <n-card class="connect-card" :title="t('connect.title')">
       <n-form @submit.prevent="handleSubmit">
         <n-form-item :label="t('connect.baseUrl')">
           <n-input
@@ -106,7 +113,8 @@ async function handleSubmit(): Promise<void> {
           </p>
         </n-space>
       </n-form>
-    </n-card>
+      </n-card>
+    </div>
   </main>
 </template>
 
@@ -116,14 +124,47 @@ async function handleSubmit(): Promise<void> {
   box-sizing: border-box;
   display: flex;
   justify-content: center;
+  min-height: calc(100vh - 160px);
   padding: 24px;
 }
 
-.connect-card {
-  max-width: 480px;
+.connect-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 420px;
   width: 100%;
 }
 
+.connect-brand {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.connect-brand-mark {
+  align-items: center;
+  background: linear-gradient(135deg, #f2a7c8 0%, #c084fc 100%);
+  border-radius: 14px;
+  box-shadow: 0 4px 18px rgba(226, 132, 178, 0.35);
+  color: #2b1220;
+  display: flex;
+  height: 52px;
+  justify-content: center;
+  width: 52px;
+}
+
+.connect-brand-name {
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  margin: 0;
+}
+
+.connect-card {
+  width: 100%;
+}
 .connect-error {
   white-space: pre-line;
 }

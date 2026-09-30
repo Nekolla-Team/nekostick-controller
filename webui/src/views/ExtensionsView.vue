@@ -8,16 +8,19 @@ import {
   NDataTable,
   NDrawer,
   NDrawerContent,
+  NDropdown,
+  NIcon,
   NModal,
   NPopconfirm,
   NSpace,
   NSpin,
   NTag,
+  useDialog,
   useMessage,
 } from 'naive-ui'
-import type { DataTableColumns } from 'naive-ui'
+import type { DataTableColumns, DropdownOption } from 'naive-ui'
 import ApiErrorAlert from '../components/ApiErrorAlert.vue'
-import JsonEditor from '../components/JsonEditor.vue'
+import { IconDots } from '../components/icons'
 import {
   cancelExtensionPackageUpload,
   deleteExtensionRecord,
@@ -295,6 +298,38 @@ const lifecycleMutation = useMutation({
   },
 })
 
+const dialog = useDialog()
+
+function runLifecycleAction(row: ExtensionRecord, action: string): void {
+  const id = row.extensionId
+  const isSelf = id === controllerExtensionId
+  // Disabling or deleting the controller takes the management API and this page offline; require
+  // an explicit warning confirmation instead of the one-click path other extensions get.
+  if (action === 'disable' && isSelf) {
+    dialog.warning({
+      title: t('extensions.columns.disable'),
+      content: t('extensions.columns.disableSelfConfirm'),
+      positiveText: t('common.confirm'),
+      negativeText: t('common.cancel'),
+      onPositiveClick: () => lifecycleMutation.mutate({ id, action: 'disable' }),
+    })
+    return
+  }
+  if (action === 'deleteRecord') {
+    dialog.warning({
+      title: t('extensions.columns.deleteRecord'),
+      content: t(isSelf ? 'extensions.columns.deleteRecordSelfConfirm' : 'extensions.columns.deleteRecordConfirm'),
+      positiveText: t('common.delete'),
+      negativeText: t('common.cancel'),
+      onPositiveClick: () => lifecycleMutation.mutate({ id, action: 'deleteRecord' }),
+    })
+    return
+  }
+  if (action === 'enable' || action === 'disable' || action === 'reload') {
+    lifecycleMutation.mutate({ id, action })
+  }
+}
+
 const refreshMutation = useMutation({
   mutationFn: refreshExtensions,
   onSuccess: async (summary) => {
@@ -350,39 +385,38 @@ const columns = computed<DataTableColumns<ExtensionRecord>>(() => [
   },
   {
     title: t('extensions.columns.running'), key: 'isRunning', width: 90,
-    render: (row) => (row.isRunning ? h(NTag, { size: 'small', type: 'success' }, { default: () => '●' }) : h('span', '—')),
+    render: (row) => (row.isRunning ? h('span', { class: 'status-dot status-dot--ok' }) : h('span', '—')),
   },
   {
-    title: t('extensions.columns.actions'), key: 'actions', width: 320,
+    title: t('extensions.columns.actions'), key: 'actions', width: 150,
     render: (row) => {
       const pending = lifecycleMutation.isPending.value
-      const buttons = [
-        h(NButton, { size: 'small', disabled: pending, onClick: () => openSettings(row) }, { default: () => t('extensions.columns.editSettings') }),
-      ]
-      const isSelf = row.extensionId === controllerExtensionId
+      const menuItems: DropdownOption[] = []
       if (row.loadState !== 'Loaded') {
-        buttons.push(h(NButton, { size: 'small', type: 'primary', ghost: true, disabled: pending, onClick: () => lifecycleMutation.mutate({ id: row.extensionId, action: 'enable' }) }, { default: () => t('extensions.columns.enable') }))
+        menuItems.push({ label: t('extensions.columns.enable'), key: 'enable' })
       }
       if (row.loadState !== 'Disabled') {
-        if (isSelf) {
-          // Disabling the controller takes the management API and this page offline; require an
-          // explicit warning confirmation instead of the one-click path other extensions get.
-          buttons.push(h(NPopconfirm, { onPositiveClick: () => lifecycleMutation.mutate({ id: row.extensionId, action: 'disable' }) }, {
-            trigger: () => h(NButton, { size: 'small', type: 'error', ghost: true, disabled: pending }, { default: () => t('extensions.columns.disable') }),
-            default: () => t('extensions.columns.disableSelfConfirm'),
-          }))
-        } else {
-          buttons.push(h(NButton, { size: 'small', disabled: pending, onClick: () => lifecycleMutation.mutate({ id: row.extensionId, action: 'disable' }) }, { default: () => t('extensions.columns.disable') }))
-        }
+        menuItems.push({ label: t('extensions.columns.disable'), key: 'disable' })
       }
       if (row.loadState === 'Loaded') {
-        buttons.push(h(NButton, { size: 'small', disabled: pending, onClick: () => lifecycleMutation.mutate({ id: row.extensionId, action: 'reload' }) }, { default: () => t('extensions.columns.reload') }))
+        menuItems.push({ label: t('extensions.columns.reload'), key: 'reload' })
       }
-      buttons.push(h(NPopconfirm, { onPositiveClick: () => lifecycleMutation.mutate({ id: row.extensionId, action: 'deleteRecord' }) }, {
-        trigger: () => h(NButton, { size: 'small', type: 'error', ghost: true, disabled: pending }, { default: () => t('extensions.columns.deleteRecord') }),
-        default: () => t(isSelf ? 'extensions.columns.deleteRecordSelfConfirm' : 'extensions.columns.deleteRecordConfirm'),
-      }))
-      return h(NSpace, { size: 4 }, { default: () => buttons })
+      menuItems.push({ type: 'divider', key: 'divider' })
+      menuItems.push({ label: t('extensions.columns.deleteRecord'), key: 'deleteRecord' })
+      return h(NSpace, { size: 4, wrap: false, align: 'center' }, {
+        default: () => [
+          h(NButton, { size: 'small', disabled: pending, onClick: () => openSettings(row) }, { default: () => t('extensions.columns.editSettings') }),
+          h(NDropdown, {
+            trigger: 'click',
+            options: menuItems,
+            onSelect: (key: string) => runLifecycleAction(row, key),
+          }, {
+            default: () => h(NButton, { size: 'small', quaternary: true, disabled: pending, 'aria-label': t('common.more') }, {
+              icon: () => h(NIcon, { size: 16 }, { default: () => h(IconDots) }),
+            }),
+          }),
+        ],
+      })
     },
   },
 ])
@@ -488,28 +522,6 @@ const columns = computed<DataTableColumns<ExtensionRecord>>(() => [
 </template>
 
 <style scoped>
-.page-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  margin: 0 auto;
-  max-width: 1280px;
-}
-
-.page-heading {
-  align-items: center;
-  display: flex;
-  justify-content: space-between;
-}
-
-h1 {
-  margin: 0;
-}
-
-.page-heading p {
-  color: var(--n-text-color-3);
-  margin: 6px 0 0;
-}
 .upload-modal {
   display: flex;
   flex-direction: column;
