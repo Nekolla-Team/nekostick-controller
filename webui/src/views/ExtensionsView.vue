@@ -315,6 +315,8 @@ function displayContentHash(hash: string | null): string {
   return hash.length > 28 ? `${hash.slice(0, 20)}…${hash.slice(-8)}` : hash
 }
 
+const controllerExtensionId = 'nekolla.nekostick.controller'
+
 const columns = computed<DataTableColumns<ExtensionRecord>>(() => [
   { title: t('extensions.columns.extensionId'), key: 'extensionId' },
   {
@@ -357,18 +359,28 @@ const columns = computed<DataTableColumns<ExtensionRecord>>(() => [
       const buttons = [
         h(NButton, { size: 'small', disabled: pending, onClick: () => openSettings(row) }, { default: () => t('extensions.columns.editSettings') }),
       ]
+      const isSelf = row.extensionId === controllerExtensionId
       if (row.loadState !== 'Loaded') {
         buttons.push(h(NButton, { size: 'small', type: 'primary', ghost: true, disabled: pending, onClick: () => lifecycleMutation.mutate({ id: row.extensionId, action: 'enable' }) }, { default: () => t('extensions.columns.enable') }))
       }
       if (row.loadState !== 'Disabled') {
-        buttons.push(h(NButton, { size: 'small', disabled: pending, onClick: () => lifecycleMutation.mutate({ id: row.extensionId, action: 'disable' }) }, { default: () => t('extensions.columns.disable') }))
+        if (isSelf) {
+          // Disabling the controller takes the management API and this page offline; require an
+          // explicit warning confirmation instead of the one-click path other extensions get.
+          buttons.push(h(NPopconfirm, { onPositiveClick: () => lifecycleMutation.mutate({ id: row.extensionId, action: 'disable' }) }, {
+            trigger: () => h(NButton, { size: 'small', type: 'error', ghost: true, disabled: pending }, { default: () => t('extensions.columns.disable') }),
+            default: () => t('extensions.columns.disableSelfConfirm'),
+          }))
+        } else {
+          buttons.push(h(NButton, { size: 'small', disabled: pending, onClick: () => lifecycleMutation.mutate({ id: row.extensionId, action: 'disable' }) }, { default: () => t('extensions.columns.disable') }))
+        }
       }
       if (row.loadState === 'Loaded') {
         buttons.push(h(NButton, { size: 'small', disabled: pending, onClick: () => lifecycleMutation.mutate({ id: row.extensionId, action: 'reload' }) }, { default: () => t('extensions.columns.reload') }))
       }
       buttons.push(h(NPopconfirm, { onPositiveClick: () => lifecycleMutation.mutate({ id: row.extensionId, action: 'deleteRecord' }) }, {
         trigger: () => h(NButton, { size: 'small', type: 'error', ghost: true, disabled: pending }, { default: () => t('extensions.columns.deleteRecord') }),
-        default: () => t('extensions.columns.deleteRecordConfirm'),
+        default: () => t(isSelf ? 'extensions.columns.deleteRecordSelfConfirm' : 'extensions.columns.deleteRecordConfirm'),
       }))
       return h(NSpace, { size: 4 }, { default: () => buttons })
     },

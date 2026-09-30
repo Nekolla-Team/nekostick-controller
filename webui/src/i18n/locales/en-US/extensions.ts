@@ -17,6 +17,8 @@ export const extensions = {
     reload: 'Reload',
     deleteRecord: 'Delete record',
     deleteRecordConfirm: 'Cascade-delete this extension record, settings, routes, and services? Only works once files are removed.',
+    disableSelfConfirm: 'This is the Nekostick Controller itself. Disabling it immediately takes the management API and this Web UI offline; recovery requires host-side configuration. Disable it?',
+    deleteRecordSelfConfirm: 'This is the Nekostick Controller record itself. Deleting it immediately takes the management API and this Web UI offline; recovery requires host-side configuration. Delete it?',
   },
   refresh: {
     button: 'Refresh directory',

@@ -17,6 +17,8 @@ export const extensions = {
     reload: '重载',
     deleteRecord: '删除记录',
     deleteRecordConfirm: '级联删除该扩展的记录、设置、路由与服务？仅在文件已移除时有效。',
+    disableSelfConfirm: '这是 Nekostick Controller 自身。禁用后管理 API 与本 Web UI 会立即不可用，只能从 Host 侧恢复。确定禁用？',
+    deleteRecordSelfConfirm: '这是 Nekostick Controller 自身的记录。删除后管理 API 与本 Web UI 会立即不可用，只能在 Host 侧恢复。确定删除？',
   },
   refresh: {
     button: '刷新目录',
