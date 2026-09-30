@@ -32,6 +32,13 @@ const routes: RouteRecordRaw[] = [
     component: () => import('../views/ServiceRuntimeView.vue'),
   },
   {
+    path: '/services/:id/output',
+    name: 'service-output',
+    component: () => import('../views/ServiceOutputView.vue'),
+    // Standalone popup window: render the viewer without the navigation shell.
+    meta: { bare: true },
+  },
+  {
     path: '/extensions',
     name: 'extensions',
     component: () => import('../views/ExtensionsView.vue'),

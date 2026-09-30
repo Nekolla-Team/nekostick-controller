@@ -9,6 +9,7 @@ import { globalSettings } from './globalSettings'
 import { routes } from './routes'
 import { services } from './services'
 import { serviceRuntime } from './serviceRuntime'
+import { serviceOutput } from './serviceOutput'
 
 export const zhCN = {
   app,
@@ -22,4 +23,5 @@ export const zhCN = {
   routes,
   services,
   serviceRuntime,
+  serviceOutput,
 } as const

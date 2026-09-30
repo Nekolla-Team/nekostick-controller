@@ -10,6 +10,7 @@ import { globalSettings } from './globalSettings'
 import { routes } from './routes'
 import { services } from './services'
 import { serviceRuntime } from './serviceRuntime'
+import { serviceOutput } from './serviceOutput'
 
 type Widen<T> = T extends string ? string : { [K in keyof T]: Widen<T[K]> }
 
@@ -25,4 +26,5 @@ export const enUS: Widen<typeof zhCN> = {
   routes,
   services,
   serviceRuntime,
+  serviceOutput,
 }

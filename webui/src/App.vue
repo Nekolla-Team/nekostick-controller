@@ -39,13 +39,14 @@ const controllerConfigModal = ref(false)
 const controllerStateQuery = useQuery({
   queryKey: ['controller', 'state'],
   queryFn: getState,
-  enabled: computed(() => connection.apiKey !== null),
+  enabled: computed(() => connection.apiKey !== null && route.meta.bare !== true),
   refetchInterval: 5000,
 })
 const controllerState = computed<ControllerState | undefined>(() => controllerStateQuery.data.value)
 const controllerError = computed(() => controllerStateQuery.error.value)
 const controllerFetching = computed(() => controllerStateQuery.isFetching.value)
 
+const isBare = computed(() => route.meta.bare === true)
 const appTheme = computed(() => (isDarkTheme.value ? darkTheme : null))
 const naiveLocale = computed(() => (i18nState.locale === 'en-US' ? naiveEnUS : naiveZhCN))
 const naiveDateLocale = computed(() => (i18nState.locale === 'en-US' ? dateEnUS : dateZhCN))
@@ -141,7 +142,12 @@ async function retryControllerState(): Promise<void> {
   >
     <n-message-provider>
       <n-dialog-provider>
-        <n-layout class="app-shell">
+        <n-layout v-if="isBare" class="bare-shell">
+          <n-layout-content class="bare-content">
+            <router-view />
+          </n-layout-content>
+        </n-layout>
+        <n-layout v-else class="app-shell">
           <n-layout-header bordered class="app-header">
             <div class="app-title">Nekostick Controller</div>
             <n-menu
@@ -206,6 +212,16 @@ body {
 <style scoped>
 .app-shell {
   height: 100vh;
+}
+
+.bare-shell {
+  height: 100vh;
+}
+
+.bare-content :deep(.n-layout-scroll-container) {
+  height: 100vh;
+  overflow: hidden;
+  padding: 0;
 }
 
 .app-shell > :deep(.n-layout-scroll-container) {

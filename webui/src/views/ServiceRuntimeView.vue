@@ -94,6 +94,13 @@ function formatDate(value: string | null): string {
   const parsed = new Date(value)
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString()
 }
+
+function openOutputWindow(): void {
+  // The viewer runs as a standalone browser window on a bare route; the hash URL keeps the
+  // current transport prefix (origin path) so HostRoute-hosted pages reach the same root.
+  const url = `${window.location.origin}${window.location.pathname}#/services/${serviceId.value}/output`
+  window.open(url, '_blank', 'popup=yes,width=960,height=640')
+}
 </script>
 
 
@@ -105,6 +112,7 @@ function formatDate(value: string | null): string {
         <p class="service-id">{{ serviceId }}</p>
       </div>
       <n-space v-if="serviceId" align="center">
+        <n-button @click="openOutputWindow">{{ t('serviceRuntime.actions.output') }}</n-button>
         <n-popconfirm
           :positive-text="t('common.confirm')"
           :negative-text="t('common.cancel')"

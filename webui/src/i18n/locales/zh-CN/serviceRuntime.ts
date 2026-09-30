@@ -9,6 +9,7 @@ export const serviceRuntime = {
   actions: {
     restart: '重启',
     resume: '恢复运行',
+    output: '输出',
   },
   confirm: {
     restart: '确定重启此服务？',
