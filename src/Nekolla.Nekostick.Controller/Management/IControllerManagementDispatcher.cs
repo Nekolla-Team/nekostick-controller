@@ -22,6 +22,22 @@ public interface IControllerManagementDispatcher
         ControllerManagementRequest request,
         Stream body,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Admits the request, then opens one live service-output stream for a WebSocket transport
+    /// session. The returned stream is caller-owned; disposing it cancels the underlying Host
+    /// subscription. This operation never buffers: it returns as soon as the Host accepts or
+    /// rejects the open.
+    /// </summary>
+    /// <param name="request">The admitted transport-neutral request metadata used for admission.</param>
+    /// <param name="serviceId">The configured service whose output is requested.</param>
+    /// <param name="stream">The output stream to open (stdout or stderr).</param>
+    /// <param name="cancellationToken">Cancels the open operation.</param>
+    ValueTask<ControllerServiceOutputStreamResult> DispatchServiceOutputStreamAsync(
+        ControllerManagementRequest request,
+        Guid serviceId,
+        ExtensionServiceOutputStream stream,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>Exposes the atomically active immutable options to transport request handlers.</summary>

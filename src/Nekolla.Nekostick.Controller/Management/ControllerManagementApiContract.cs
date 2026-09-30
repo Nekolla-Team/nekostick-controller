@@ -27,6 +27,10 @@ public static class ControllerManagementApiContract
     public const string ServiceRuntimeResumePath = "/v1/services/{id}/runtime/resume";
     /// <summary>Template path for strictly restarting one service on the local host.</summary>
     public const string ServiceRuntimeRestartPath = "/v1/services/{id}/runtime/restart";
+    /// <summary>Template path for streaming one service's live output over WebSocket.</summary>
+    public const string ServiceOutputStreamPath = "/v1/services/{id}/output/stream";
+    /// <summary>Query parameter selecting the output stream (stdout or stderr).</summary>
+    public const string ServiceOutputStreamQueryParameter = "stream";
     /// <summary>Path for extension operations.</summary>
     public const string ExtensionsPath = "/v1/extensions";
     /// <summary>Path of the extension directory refresh endpoint.</summary>

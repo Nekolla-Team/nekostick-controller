@@ -10,7 +10,7 @@ namespace Nekolla.Nekostick.Controller.IntegrationTests;
 /// Configuration reads and writes are backed by a versioned snapshot so management mutations
 /// round-trip exactly as they would against a real Host.
 /// </summary>
-public sealed class FakeHostBridge : IExtensionHostBridge13
+public sealed class FakeHostBridge : IExtensionHostBridge14
 {
     private readonly object _sync = new();
     private readonly HostApiVersion _apiVersion;
@@ -49,6 +49,8 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
         Events = new FakeEventPublisher();
         RouteEvents = new FakeRouteEvents();
         Management = new FakeManagementApi(this);
+        Dependencies = new FakeDependencyApi();
+        ServiceOutput = new FakeServiceOutputApi();
     }
     public HostApiVersion ApiVersion => _apiVersion;
     public IExtensionSettingsReader Configuration { get; }
@@ -67,6 +69,11 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
     public IExtensionRouteEvents RouteEvents { get; }
     public IExtensionLogWriter LogWriter { get; }
 
+    public IExtensionDependencyApi Dependencies { get; }
+    /// <summary>Gets the API 1.4 service-output capability.</summary>
+    public IExtensionServiceOutputApi ServiceOutput { get; }
+    /// <summary>Gets the programmable fake behind the API 1.4 service-output capability.</summary>
+    public FakeServiceOutputApi ServiceOutputFake => (FakeServiceOutputApi)ServiceOutput;
     /// <summary>Gets the latest host information snapshot returned by the 1.3.3 bridge.</summary>
     public ExtensionHostInfoSnapshot HostInfo
     {
@@ -924,6 +931,59 @@ public sealed class FakeHostBridge : IExtensionHostBridge13
     {
         public bool TrySubscribe(Func<ExtensionEvent, CancellationToken, ValueTask> callback) => false;
         public bool TryRegisterHook(ExtensionRouteEventStage stage, Func<ExtensionRouteHookContext, CancellationToken, ValueTask<ExtensionRouteHookResult>> callback) => false;
+    }
+
+    private sealed class FakeDependencyApi : IExtensionDependencyApi
+    {
+        public IExtensionDependencyContext GetDependencyContext(string extensionId) => new FakeDependencyContext(extensionId);
+    }
+
+    private sealed class FakeDependencyContext(string extensionId) : IExtensionDependencyContext
+    {
+        public string ExtensionId { get; } = extensionId;
+        public ExtensionDependencyState State => ExtensionDependencyState.NotDeclared;
+        public bool IsOptional => false;
+        public string VersionRange => string.Empty;
+        public string? InstalledVersion => null;
+
+        public bool TryImport<TContract>(string contractId, out TContract? contract) where TContract : class
+        {
+            contract = null;
+            return false;
+        }
+    }
+
+    /// <summary>Programmable API 1.4 service-output capability used by the WebSocket endpoint tests.</summary>
+    public sealed class FakeServiceOutputApi : IExtensionServiceOutputApi
+    {
+        private readonly ConcurrentQueue<(Guid ServiceId, ExtensionServiceOutputStream Stream)> _opens = new();
+        private volatile Func<Guid, ExtensionServiceOutputStream, ExtensionServiceOutputStreamResult>? _openHandler;
+
+        /// <summary>Gets every open request observed so far, in order.</summary>
+        public IReadOnlyCollection<(Guid ServiceId, ExtensionServiceOutputStream Stream)> Opens => _opens.ToArray();
+
+        /// <summary>Programs the result of subsequent open calls; the default rejects with NotFound.</summary>
+        public void OnOpen(Func<Guid, ExtensionServiceOutputStream, ExtensionServiceOutputStreamResult> handler) =>
+            _openHandler = handler;
+
+        public ValueTask<ExtensionServiceOutputStreamResult> OpenStreamAsync(
+            Guid serviceId,
+            ExtensionServiceOutputStream stream,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _opens.Enqueue((serviceId, stream));
+            return ValueTask.FromResult(
+                _openHandler?.Invoke(serviceId, stream) ??
+                new ExtensionServiceOutputStreamResult(false, ExtensionServiceOutputCode.NotFound, serviceId, null));
+        }
+
+        public ValueTask<ExtensionServiceOutputSubscriptionResult> SubscribeAsync(
+            Guid serviceId,
+            ExtensionServiceOutputStream stream,
+            IExtensionServiceOutputSink sink,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 }
 

@@ -23,6 +23,7 @@
 | `GET` | `/v1/services/{id}/runtime` | 读取单个服务的 runtime telemetry |
 | `POST` | `/v1/services/{id}/runtime/resume` | 在本节点恢复处于 waiting 的 service（Host API >=1.3.3） |
 | `POST` | `/v1/services/{id}/runtime/restart` | 在本节点严格重启 service（Host API >=1.3.3） |
+| `GET` | `/v1/services/{id}/output/stream` | 订阅单个服务的实时 stdout/stderr 输出流（WebSocket，Host API >=1.4.0，见 2.6） |
 | `GET`, `PUT`, `DELETE` | `/v1/services/{id}/environment` | 读取、替换或清空 service environment |
 | `GET` | `/v1/extensions` | 列出 extension records |
 | `GET` | `/v1/extensions/{id}` | 读取 extension record |
@@ -109,6 +110,18 @@ Web UI 由 controller extension settings 中的 `enableWebUi` 控制。该设置
 
 只有设置启用且程序集包含 Web UI 构建产物（`webui/dist`，以 `IncludeWebUi=true` 打包）时才会提供页面与静态资源；禁用、资源不存在或不满足 HostRoute streaming 条件时，request 会继续现有管线并返回普通的 `404`/认证响应。Host API `<1.3.2` 的 buffered HostRoute 不提供页面，root 请求保持普通 `404` 语义。
 
+### 2.6 Service 输出流（WebSocket）
+
+`GET /v1/services/{id}/output/stream` 把单个服务的实时 stdout/stderr 以 WebSocket 二进制帧推送给客户端：连接即订阅，断开即取消订阅。只在 HTTP/JSON 与 Unix socket 传输上提供；HostRoute 和 gRPC 无法承载 upgrade，该路径在这些传输上按普通未知资源处理（`404 not_found`）。
+
+- 握手：标准 WebSocket upgrade request，认证使用同一个 `x-nekostick-controller-key` header；认证或 dispatcher 级 admission 失败在 upgrade 之前以普通 envelope 响应（`401 unauthorized` 等）。
+- 请求形状检查先于认证执行：非 upgrade 的普通 GET、`stream` 取值非法或 header 超限时直接返回 transport-level 的空 body `400`（没有 envelope，与第 4 节末尾的 admission 约定一致）；因此同时缺 key 且形状非法的请求得到 `400` 而非 `401`。
+- query：`?stream=stdout`（缺省默认值）或 `?stream=stderr`；其他值按上面的空 body `400` 处理。
+- 数据帧：每条二进制 message 承载一次读取的原始字节，不做行缓冲也不做文本转码；客户端不应假设帧边界对齐行边界或单次写调用。
+- 语义：流绑定当前进程代次，只推送订阅之后产生的新输出，不回放历史。Host 侧缓冲有界，生产速度超过消费速度时可能静默丢弃字节，因此它适合实时观察，不能当作可靠的日志传输通道。
+- 关闭码：`1000` 表示进程代次结束（输出流 EOF）；`1001` 表示管理会话结束（API key 轮换）或传输正在停止；`1011` 表示 Host 输出流故障。客户端主动关闭连接即取消订阅，Host 订阅随连接释放。
+- 错误（upgrade 之前）：Host API 低于 `1.4.0` 或能力缺失返回 `501 unsupported`；未知 service 返回 `404 not_found`；service 没有可订阅的运行中输出泵返回 `409 not_running`；Host bridge 不可用返回 `503 unavailable`，这些都是普通 envelope。dispatcher 内部异常则返回空 body 的 `503`。
+
 ## 3. 认证与请求边界
 
 所有启用传输都使用同一个 API key：
@@ -187,6 +200,7 @@ key 必须恰好出现一次，长度 `32..4096`，不能包含空白。HTTP、U
 | 405 | `method_not_allowed` | 已识别资源不支持该 method |
 | 409 | `reserved_route` | 操作触及控制器保留 route |
 | 409 | `downgrade_forbidden` | 扩展安装包版本低于已安装版本 |
+| 409 | `not_running` | 服务没有可订阅的运行中输出流 |
 | 412 | `precondition_failed` | `If-Match` 已过期 |
 | 428 | `precondition_required` | mutation 缺少 `If-Match` |
 | 501 | `unsupported` | Host API、能力或操作不支持 |
@@ -215,6 +229,8 @@ transport-level admission 失败时，HTTP/Unix 可能直接返回空 body 的 `
 - 格式或数量错误：`400 invalid_request`；
 - 版本过期或 CAS 失败：`412 precondition_failed`；
 - 服务端只尝试一次，不自动重试。
+
+写入内容与现有配置完全相同时，Host 视为 no-op：写入成功但聚合版本与 ETag 不推进，响应 ETag 等于提交的 `If-Match`。客户端不应假设每次成功的 mutation 都会推进版本。
 
 PATCH 使用 JSON Merge Patch：body 必须是 object；`null` 删除字段；object 递归合并；数组整体替换；未知字段无效。PATCH 不能写服务器字段，也不能修改 service `environment`；environment 必须使用专用 subresource。
 

@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Net;
+using System.Net.WebSockets;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -11,6 +12,7 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Nekolla.Nekostick.Controller.Management;
+using Nekolla.Nekostick.Contracts;
 
 namespace Nekolla.Nekostick.Controller.Adapters.HttpUnix;
 
@@ -332,6 +334,15 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
                             });
                     }
 
+                    // Installs the upgrade feature the service-output endpoint accepts with;
+                    // without it Kestrel never reports IsWebSocketRequest. Keep-alive bounds how
+                    // long a half-open peer can pin a Host output subscription.
+                    application.UseWebSockets(new WebSocketOptions
+                    {
+                        KeepAliveInterval = TimeSpan.FromSeconds(30),
+                        KeepAliveTimeout = TimeSpan.FromSeconds(30)
+                    });
+
                     application.Run(context => HandleRequestAsync(context, dispatcher, options));
                 });
             });
@@ -390,6 +401,15 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
                 await HandleInstallAsync(context, dispatcher, requestPath, cancellationToken).ConfigureAwait(false);
                 return;
             }
+
+        // The service-output WebSocket endpoint upgrades the connection and must run before the
+        // buffered-body admission path; the upgrade has no request body to bound.
+        if (string.Equals(context.Request.Method, "GET", StringComparison.OrdinalIgnoreCase) &&
+            TryParseServiceOutputStreamPath(requestPath, out var outputServiceId))
+        {
+            await HandleServiceOutputStreamAsync(context, dispatcher, outputServiceId, requestPath, cancellationToken).ConfigureAwait(false);
+            return;
+        }
 
         if (context.Request.ContentLength is > ControllerAdmissionLimits.MaximumRequestBodyBytes)
         {
@@ -510,6 +530,310 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
         }
 
         await WriteResponseAsync(context, response, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task HandleServiceOutputStreamAsync(
+        HttpContext context,
+        IControllerManagementDispatcher dispatcher,
+        Guid serviceId,
+        string requestPath,
+        CancellationToken cancellationToken)
+    {
+        if (!context.WebSockets.IsWebSocketRequest)
+        {
+            // The endpoint exists only as a WebSocket upgrade; plain GET carries no meaning.
+            await WriteResponseAsync(context, ControllerManagementResponse.InvalidRequest, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (!TryParseOutputStreamQuery(context.Request.Query, out var outputStream) ||
+            !TryCopyHeaders(context.Request.Headers, out var headers, out var apiKey) ||
+            !ControllerAdmissionLimits.TryCreateRequest(
+                _transport,
+                "GET",
+                requestPath,
+                apiKey,
+                headers,
+                ReadOnlyMemory<byte>.Empty,
+                out var request) ||
+            request is null)
+        {
+            await WriteResponseAsync(context, ControllerManagementResponse.InvalidRequest, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        ControllerServiceOutputStreamResult result;
+        try
+        {
+            result = await dispatcher.DispatchServiceOutputStreamAsync(request, serviceId, outputStream, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch
+        {
+            result = ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponse.Unavailable);
+        }
+
+        if (result.Stream is not { } output)
+        {
+            await WriteResponseAsync(
+                context,
+                result.Rejection ?? ControllerManagementResponse.Unavailable,
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        try
+        {
+            await PumpServiceOutputAsync(context, output, result.SessionEnded, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The peer dropped between the open and the upgrade; the stream is already disposed.
+        }
+        catch (WebSocketException)
+        {
+            // The upgrade failed after the stream opened; the pump's using scope detached it.
+        }
+    }
+
+    /// <summary>
+    /// Pumps one opened Host output stream into WebSocket binary messages until the process
+    /// generation ends, the peer disconnects, or the listener stops. Disposing the stream on the
+    /// way out detaches the Host subscription.
+    /// </summary>
+    private static async Task PumpServiceOutputAsync(
+        HttpContext context,
+        Stream output,
+        CancellationToken sessionEnded,
+        CancellationToken cancellationToken)
+    {
+        // Ownership is taken before the upgrade so a failed accept still detaches the Host stream.
+        await using (output.ConfigureAwait(false))
+        {
+            using var socket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
+            var stopping = context.RequestServices
+                .GetService<IHostApplicationLifetime>()?.ApplicationStopping ?? CancellationToken.None;
+            // hardStop: peer disconnect, listener stop, or session revocation. closeSource adds the
+            // peer's polite close frame. Sends use hardStop so a close frame arriving mid-send does
+            // not abort the socket; the Host-stream read uses closeSource so a polite close unblocks
+            // an idle pump. The socket close-watch receives on watchStop instead: canceling a
+            // pending ManagedWebSocket receive aborts the connection, which would destroy the
+            // graceful close handshake the finally block below still has to send.
+            using var hardStop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, stopping, sessionEnded);
+            using var closeSource = CancellationTokenSource.CreateLinkedTokenSource(hardStop.Token);
+            using var watchStop = new CancellationTokenSource();
+            var closeTask = ReceiveClientCloseAsync(socket, closeSource, watchStop.Token);
+            var closeStatus = WebSocketCloseStatus.NormalClosure;
+            var closeDescription = "The service process exited.";
+            var buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
+            try
+            {
+                while (!closeSource.IsCancellationRequested)
+                {
+                    int read;
+                    try
+                    {
+                        read = await output.ReadAsync(buffer.AsMemory(), closeSource.Token).ConfigureAwait(false);
+                    }
+                    catch (IOException)
+                    {
+                        // Host teardown or a fan-out fault ends the stream with an IOException.
+                        closeStatus = WebSocketCloseStatus.InternalServerError;
+                        closeDescription = "The service output stream faulted.";
+                        break;
+                    }
+
+                    if (read == 0)
+                    {
+                        break;
+                    }
+
+                    await socket.SendAsync(
+                        buffer.AsMemory(0, read),
+                        WebSocketMessageType.Binary,
+                        endOfMessage: true,
+                        hardStop.Token).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) when (closeSource.IsCancellationRequested)
+            {
+                // The peer closed, the session ended, or the transport is stopping.
+            }
+            catch (WebSocketException)
+            {
+            }
+            catch (IOException)
+            {
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+                if (!cancellationToken.IsCancellationRequested)
+                {
+                    if (closeSource.IsCancellationRequested && closeStatus == WebSocketCloseStatus.NormalClosure)
+                    {
+                        if (sessionEnded.IsCancellationRequested)
+                        {
+                            closeStatus = WebSocketCloseStatus.EndpointUnavailable;
+                            closeDescription = "The management session ended.";
+                        }
+                        else if (stopping.IsCancellationRequested)
+                        {
+                            closeStatus = WebSocketCloseStatus.EndpointUnavailable;
+                            closeDescription = "The transport is shutting down.";
+                        }
+                        else
+                        {
+                            closeDescription = "The client closed the session.";
+                        }
+                    }
+
+                    // CloseOutputAsync only SENDS the close frame: the pending receive in closeTask
+                    // then observes the peer's answer and completes the handshake. CloseAsync would
+                    // contend with that in-flight receive and canceling the receive first would
+                    // abort the upgraded connection, so the ordering here is deliberate. The sends
+                    // are bounded so a non-reading peer cannot pin the Host stream forever.
+                    using var closeTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    try
+                    {
+                        if (socket.State == WebSocketState.Open)
+                        {
+                            await socket.CloseOutputAsync(closeStatus, closeDescription, closeTimeout.Token).ConfigureAwait(false);
+                        }
+                        else if (socket.State == WebSocketState.CloseReceived)
+                        {
+                            // The receive task already consumed the peer's close frame; answering it
+                            // completes the handshake without another receive.
+                            await socket.CloseAsync(closeStatus, closeDescription, closeTimeout.Token).ConfigureAwait(false);
+                        }
+                    }
+                    catch (WebSocketException)
+                    {
+                    }
+                    catch (IOException)
+                    {
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // The peer stopped reading; the close frame could not leave in time.
+                    }
+                }
+
+                try
+                {
+                    await closeTask.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    // The peer never answered the close frame; cancel the abandoned receive.
+                }
+                catch (WebSocketException)
+                {
+                }
+                catch (IOException)
+                {
+                }
+
+                watchStop.Cancel();
+                closeSource.Cancel();
+                try
+                {
+                    await closeTask.WaitAsync(TimeSpan.FromSeconds(1), CancellationToken.None).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // The receive observes a torn-down connection; nothing left to recover.
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Watches for the peer's close frame so a polite disconnect cancels the pump. The receive runs
+    /// on <paramref name="watchToken"/> rather than <paramref name="closeSource"/>: canceling a
+    /// pending ManagedWebSocket receive aborts the connection, so the watch is only canceled after
+    /// the close handshake completed.
+    /// </summary>
+    private static async Task ReceiveClientCloseAsync(
+        WebSocket socket,
+        CancellationTokenSource closeSource,
+        CancellationToken watchToken)
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(256);
+        try
+        {
+            while (!closeSource.IsCancellationRequested && socket.State is WebSocketState.Open or WebSocketState.CloseSent)
+            {
+                var received = await socket.ReceiveAsync(buffer.AsMemory(), watchToken).ConfigureAwait(false);
+                if (received.MessageType == WebSocketMessageType.Close)
+                {
+                    closeSource.Cancel();
+                    return;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (watchToken.IsCancellationRequested)
+        {
+        }
+        catch (WebSocketException)
+        {
+            closeSource.Cancel();
+        }
+        catch (IOException)
+        {
+            closeSource.Cancel();
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private static bool TryParseServiceOutputStreamPath(string path, out Guid serviceId)
+    {
+        serviceId = default;
+        const string prefix = ControllerManagementApiContract.ServicesPath + "/";
+        const string suffix = "/output/stream";
+        if (path.Length <= prefix.Length + suffix.Length ||
+            !path.StartsWith(prefix, StringComparison.Ordinal) ||
+            !path.EndsWith(suffix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var idText = path.AsSpan(prefix.Length, path.Length - prefix.Length - suffix.Length);
+        return Guid.TryParse(idText, out serviceId);
+    }
+
+    private static bool TryParseOutputStreamQuery(IQueryCollection query, out ExtensionServiceOutputStream stream)
+    {
+        stream = ExtensionServiceOutputStream.Stdout;
+        var values = query[ControllerManagementApiContract.ServiceOutputStreamQueryParameter];
+        if (values.Count == 0)
+        {
+            return true;
+        }
+
+        if (values.Count != 1)
+        {
+            return false;
+        }
+
+        if (string.Equals(values[0], "stdout", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!string.Equals(values[0], "stderr", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        stream = ExtensionServiceOutputStream.Stderr;
+        return true;
     }
 
     private static async ValueTask WriteWebUiResourceAsync(

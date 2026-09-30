@@ -728,6 +728,7 @@ internal sealed class ControllerRuntime
 
         try
         {
+            Dispatcher.EndSessions();
             await Dispatcher.StopAsync(CancellationToken.None).ConfigureAwait(false);
         }
         catch
@@ -812,6 +813,7 @@ internal sealed class ControllerRuntime
 
             // The cancellation check above makes terminal cleanup deterministic; no resource
             // remains that should be left live once the handler has been tombstoned.
+            Dispatcher.EndSessions();
             await Dispatcher.StopAsync(CancellationToken.None).ConfigureAwait(false);
             await Dispatcher.QuiesceAsync().ConfigureAwait(false);
             _resourceAcquisitionPending = false;
@@ -916,6 +918,7 @@ internal sealed class ControllerRuntime
         // unregister the fixed handler.
         try
         {
+            Dispatcher.EndSessions();
             await Dispatcher.StopAsync(CancellationToken.None).ConfigureAwait(false);
         }
         catch

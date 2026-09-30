@@ -47,6 +47,8 @@ internal static class ControllerManagementResponseBuilder
     /// </remarks>
     internal static ControllerManagementResponse SettingsAbsent(long version) => Create(404, ControllerDispatchCode.NotFound, new ControllerResponseEnvelope { Ok = false, Code = "no_settings", Message = "The extension settings document has not been created." }, version);
     internal static ControllerManagementResponse Conflict => Error(409, ControllerDispatchCode.Conflict, "conflict", "The management resource conflicts with current state.");
+    /// <summary>Reports a configured service without a live output pump to stream from.</summary>
+    internal static ControllerManagementResponse ServiceNotRunning => Error(409, ControllerDispatchCode.Conflict, "not_running", "The service has no live output to stream.");
     internal static ControllerManagementResponse PreconditionRequired => Error(428, ControllerDispatchCode.InvalidRequest, "precondition_required", "Exactly one If-Match precondition is required.");
     internal static ControllerManagementResponse PreconditionFailed => Error(412, ControllerDispatchCode.Conflict, "precondition_failed", "The supplied If-Match precondition is stale.");
     internal static ControllerManagementResponse ReservedRoute => Error(409, ControllerDispatchCode.Conflict, "reserved_route", "The controller management route is reserved.");

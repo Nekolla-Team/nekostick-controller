@@ -20,6 +20,9 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
 
     private readonly IExtensionHostBridge? _bridge;
     private readonly SemaphoreSlim _mutationGate = new(1, 1);
+    // Never disposed: live WebSocket pumps link tokens lazily, and disposing a source while a
+    // linked registration is in flight would fault the pump instead of ending it.
+    private CancellationTokenSource _sessionSource = new();
     private int _inFlight;
     private readonly object _drainSync = new();
     private TaskCompletionSource? _drain;
@@ -70,10 +73,19 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
     internal void SwapOptions(ControllerOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
+        var current = Volatile.Read(ref _configuration);
         var reloadHandler = Volatile.Read(ref _reloadHandler);
         var stateProvider = Volatile.Read(ref _stateProvider);
         var core = new ControllerManagementCore(options, _bridge, reloadHandler, stateProvider, _mutationGate, admissionProbe: () => IsStarted);
         Volatile.Write(ref _configuration, new DispatcherConfiguration(options, core));
+        if (!string.Equals(current.Options.ApiKey, options.ApiKey, StringComparison.Ordinal))
+        {
+            // A rotated API key revokes every session admitted under the old one; live output
+            // streams observe the cancellation and close instead of outliving the credential.
+            var sessionSource = Volatile.Read(ref _sessionSource);
+            sessionSource.Cancel();
+            Interlocked.CompareExchange(ref _sessionSource, new CancellationTokenSource(), sessionSource);
+        }
     }
 
     /// <summary>Gets the active dispatcher options for runtime reconciliation.</summary>
@@ -96,16 +108,29 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
         }
 
         Interlocked.Exchange(ref _state, 1);
+        var sessionSource = Volatile.Read(ref _sessionSource);
+        if (sessionSource.IsCancellationRequested)
+        {
+            Interlocked.CompareExchange(ref _sessionSource, new CancellationTokenSource(), sessionSource);
+        }
+
         return ValueTask.CompletedTask;
     }
 
     /// <summary>Stops admission idempotently.</summary>
+    /// <remarks>
+    /// Reload stops admission transiently and must not disturb admitted sessions, so ending
+    /// sessions is a separate explicit operation reserved for teardown and key rotation.
+    /// </remarks>
     internal ValueTask StopAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         Interlocked.Exchange(ref _state, 0);
         return ValueTask.CompletedTask;
     }
+
+    /// <summary>Ends every admitted session; used when the runtime is torn down for good.</summary>
+    internal void EndSessions() => Volatile.Read(ref _sessionSource).Cancel();
 
     /// <inheritdoc />
     public async ValueTask<ControllerManagementResponse> DispatchAsync(
@@ -162,6 +187,43 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
             }
 
             return await configuration.Core.DispatchStreamingAsync(request, body, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            EndDispatch();
+        }
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<ControllerServiceOutputStreamResult> DispatchServiceOutputStreamAsync(
+        ControllerManagementRequest request,
+        Guid serviceId,
+        ExtensionServiceOutputStream stream,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        Interlocked.Increment(ref _inFlight);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsStarted)
+            {
+                return ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.Unavailable);
+            }
+
+            var configuration = Volatile.Read(ref _configuration);
+            if (Admit(request, configuration.Options) is { } rejection)
+            {
+                return ControllerServiceOutputStreamResult.Rejected(rejection);
+            }
+
+            var sessionEnded = Volatile.Read(ref _sessionSource).Token;
+            var result = await configuration.Core
+                .OpenServiceOutputStreamAsync(serviceId, stream, cancellationToken)
+                .ConfigureAwait(false);
+            return result.Stream is { } opened
+                ? ControllerServiceOutputStreamResult.Opened(opened, sessionEnded)
+                : result;
         }
         finally
         {
