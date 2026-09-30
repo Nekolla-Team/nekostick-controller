@@ -1,7 +1,9 @@
 export const controllerConfig = {
   title: '控制器配置',
   webUi: 'Web UI',
+  preventSelfDisable: '阻止禁用自身',
   webUiDisabledWarning: '关闭 Web UI 后，设置重载完成时本页面将不再被提供；当前已打开的页面可继续使用，API 不受影响。',
+  preventSelfDisableHint: '启用后，管理 API 会拒绝禁用 Nekostick Controller 自身的请求；启用、重载与删除记录不受影响。',
   httpListener: 'HTTP 监听',
   httpPort: 'HTTP 端口',
   grpcListener: 'gRPC 监听',

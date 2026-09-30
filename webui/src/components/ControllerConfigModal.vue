@@ -55,6 +55,7 @@ const unixSocketPath = ref('')
 const corsOrigins = ref<string[]>([])
 const enableHostRoute = ref(false)
 const enableWebUi = ref(true)
+const preventSelfDisable = ref(false)
 const hostRoutePath = ref('')
 const apiKey = ref('')
 let originalSettings: JsonObject = {}
@@ -105,6 +106,7 @@ async function load(): Promise<void> {
     hostRoutePath.value =
       typeof originalSettings.hostRoutePath === 'string' ? originalSettings.hostRoutePath : ''
     enableWebUi.value = originalSettings.enableWebUi !== false
+    preventSelfDisable.value = originalSettings.preventSelfDisable === true
     apiKey.value =
       typeof originalSettings.apiKey === 'string' && originalSettings.apiKey !== ''
         ? originalSettings.apiKey
@@ -200,6 +202,7 @@ function buildSettings(): JsonObject {
     enableHttpJson: enableHttp.value,
     enableHostRoute: enableHostRoute.value,
     enableWebUi: enableWebUi.value,
+    preventSelfDisable: preventSelfDisable.value,
     enableGrpc: enableGrpc.value,
     enableUnixSocket: enableUnixSocket.value,
     corsAllowedOrigins: corsOrigins.value.filter((origin) => origin.trim() !== ''),
@@ -332,6 +335,13 @@ async function save(): Promise<void> {
           </n-form-item>
           <n-alert v-if="!enableWebUi" type="warning" :show-icon="true">
             {{ t('controllerConfig.webUiDisabledWarning') }}
+          </n-alert>
+          <n-form-item>
+            <template #label>{{ t('controllerConfig.preventSelfDisable') }}</template>
+            <n-switch v-model:value="preventSelfDisable" />
+          </n-form-item>
+          <n-alert v-if="preventSelfDisable" type="info" :show-icon="true">
+            {{ t('controllerConfig.preventSelfDisableHint') }}
           </n-alert>
           <n-form-item>
             <template #label>{{ t('controllerConfig.httpListener') }}</template>

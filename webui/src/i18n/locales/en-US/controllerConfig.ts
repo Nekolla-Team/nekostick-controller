@@ -1,8 +1,10 @@
 export const controllerConfig = {
   title: 'Controller Configuration',
   webUi: 'Web UI',
+  preventSelfDisable: 'Prevent self-disable',
   webUiDisabledWarning:
     'Disabling the Web UI stops serving this page after the settings reload. The current page stays usable until closed, and the API is unaffected.',
+  preventSelfDisableHint: 'When enabled, the management API rejects requests to disable the Nekostick Controller extension itself; enable, reload, and record deletion are unaffected.',
   httpListener: 'HTTP listener',
   httpPort: 'HTTP port',
   grpcListener: 'gRPC listener',
