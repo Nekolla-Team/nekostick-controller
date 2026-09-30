@@ -44,6 +44,8 @@ public static class ControllerManagementApiContract
     public const string ExtensionsInstallPath = "/v1/extensions/install";
     /// <summary>Path for unversioned controller runtime state.</summary>
     public const string StatePath = "/v1/controller/state";
+    /// <summary>Path for unversioned controller and host telemetry.</summary>
+    public const string TelemetryPath = "/v1/controller/telemetry";
     /// <summary>Path for hot controller settings reload.</summary>
     public const string ReloadSettingsPath = "/v1/controller/reload-settings";
     /// <summary>HTTP header carrying a resource entity tag.</summary>

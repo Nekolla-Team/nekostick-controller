@@ -12,6 +12,7 @@
 | --- | --- | --- |
 | `GET` | `/v1` | 读取 API 根信息和配置概览 |
 | `GET` | `/v1/controller/state` | 读取 bootstrap 模式、listener 运行状态和 Web UI 状态 |
+| `GET` | `/v1/controller/telemetry` | 读取 .NET 运行时、进程与主机内存/CPU 遥测 |
 | `GET` | `/`（HTTP/JSON、Unix socket）；`hostRoutePath/`（HostRoute） | 读取内嵌的 SPA 外壳（无需 API key） |
 | `GET` | `/<file>`（HTTP/JSON、Unix socket）；`hostRoutePath/<file>`（HostRoute） | 读取内嵌的 Web UI 静态资源（无需 API key） |
 | `GET`, `PATCH` | `/v1/global-settings` | 读取或更新全局设置 |
@@ -610,6 +611,65 @@ curl --fail-with-body \
 | `lastSnapshotState` | 最近快照结果：`unknown`、`accepted` 或 `rejected` |
 | `lastSnapshotStateAt` | 最近快照状态变更时间，未知时为 `null` |
 | `readiness` | Host readiness：`unknown`、`unready`、`ready`、`degraded` 或 `publishing` |
+
+
+`GET /v1/controller/telemetry` 返回 controller 进程与主机的时点遥测快照。它是只读、未版本化的状态读取：请求 body 必须为空，不接受 `If-Match`，成功响应不带 ETag 且 envelope `version` 固定为 `null`。接口供调用方自行轮询采样（例如每 1–2 秒）：CPU 占用率由相邻两次采样的 tick 差分计算，因此每次连接后的首个样本中 `cpuPercent` 字段为 `null`。
+
+```json
+{
+  "apiVersion": 1,
+  "ok": true,
+  "code": "ok",
+  "message": "The operation completed.",
+  "data": {
+    "timestampUnixMs": 1770000000000,
+    "uptimeSeconds": 3600.5,
+    "runtime": {
+      "managedHeapBytes": 8388608,
+      "heapCommittedBytes": 16777216,
+      "totalAllocatedBytes": 268435456,
+      "gen0Collections": 12,
+      "gen1Collections": 4,
+      "gen2Collections": 1,
+      "pauseTimePercentage": 0.4,
+      "threadCount": 24,
+      "handleCount": 220
+    },
+    "process": {
+      "workingSetBytes": 134217728,
+      "privateMemoryBytes": 100663296,
+      "cpuPercent": 1.25
+    },
+    "host": {
+      "memoryTotalBytes": 34359738368,
+      "memoryUsedBytes": 25769803776,
+      "cpuPercent": 12.5
+    }
+  },
+  "version": null
+}
+```
+
+| 字段 | 语义 |
+| --- | --- |
+| `timestampUnixMs` | 采样时间（Unix epoch 毫秒） |
+| `uptimeSeconds` | 进程运行时长（秒） |
+| `runtime.managedHeapBytes` | 托管堆当前使用字节数（`GC.GetTotalMemory`） |
+| `runtime.heapCommittedBytes` | GC 提交的托管堆字节数 |
+| `runtime.totalAllocatedBytes` | 进程启动以来托管堆累计分配字节数 |
+| `runtime.gen0/1/2Collections` | 各代 GC 累计回收次数 |
+| `runtime.pauseTimePercentage` | GC 暂停时间占墙钟时间百分比 |
+| `runtime.threadCount` | 进程活动线程数 |
+| `runtime.handleCount` | 打开的 OS 句柄（POSIX 为 fd）数；平台无法报告时为 `null`（如 macOS） |
+| `process.workingSetBytes` | 进程工作集字节数 |
+| `process.privateMemoryBytes` | 进程私有内存字节数；平台无法报告时为 `null`（如 macOS） |
+| `process.cpuPercent` | 相邻采样间进程 CPU 占用，占整机 CPU 容量的百分比（0–100）；首个样本为 `null` |
+| `host` | 主机机器级遥测；平台无采样器时为 `null`（nekostick 仅支持 POSIX，Linux 与 macOS 均有采样器） |
+| `host.memoryTotalBytes` | 主机物理内存总量 |
+| `host.memoryUsedBytes` | 主机已用物理内存（Linux：`total − free − buffers`；macOS：`internal − purgeable + wired + compressor`） |
+| `host.cpuPercent` | 相邻采样间整机 CPU 占用百分比（0–100）；首个样本为 `null` |
+
+主机指标通过平台原生接口采样：Linux 使用 `sysinfo(2)` 与 `/proc/stat`，macOS 使用 `sysctl` 与 `host_statistics64`。主机内存用量是采样瞬间的近似值，不包含 swap。
 
 
 `POST /v1/controller/reload-settings` 从 Host 重新读取 `nekolla.nekostick.controller` extension settings，并在不重新加载 extension 的情况下应用它们。请求 body 必须为空，并且必须恰好包含一个强聚合 `If-Match`；先读取任一持久化配置资源的 ETag，再提交重载：

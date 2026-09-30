@@ -29,6 +29,7 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
     private DispatcherConfiguration _configuration;
     private Func<long, CancellationToken, ValueTask<ControllerManagementResponse>>? _reloadHandler;
     private Func<CancellationToken, ValueTask<ControllerStateDto?>>? _stateProvider;
+    private Func<CancellationToken, ValueTask<ControllerTelemetryDto>>? _telemetryProvider;
     private int _state;
 
     /// <summary>Creates an admission dispatcher without a Host bridge.</summary>
@@ -54,19 +55,21 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
     /// <summary>Gets whether the dispatcher is accepting authenticated requests.</summary>
     public bool IsStarted => Volatile.Read(ref _state) == 1;
 
-    /// <summary>Configures runtime reload and fresh state callbacks.</summary>
+    /// <summary>Configures runtime reload, fresh state, and telemetry callbacks.</summary>
     internal void ConfigureRuntimeCallbacks(
         Func<long, CancellationToken, ValueTask<ControllerManagementResponse>> reloadHandler,
-        Func<CancellationToken, ValueTask<ControllerStateDto?>> stateProvider)
+        Func<CancellationToken, ValueTask<ControllerStateDto?>> stateProvider,
+        Func<CancellationToken, ValueTask<ControllerTelemetryDto>>? telemetryProvider = null)
     {
         ArgumentNullException.ThrowIfNull(reloadHandler);
         ArgumentNullException.ThrowIfNull(stateProvider);
         Volatile.Write(ref _reloadHandler, reloadHandler);
         Volatile.Write(ref _stateProvider, stateProvider);
+        Volatile.Write(ref _telemetryProvider, telemetryProvider);
         var current = Volatile.Read(ref _configuration);
         Volatile.Write(ref _configuration, new DispatcherConfiguration(
             current.Options,
-            new ControllerManagementCore(current.Options, _bridge, reloadHandler, stateProvider, _mutationGate, admissionProbe: () => IsStarted)));
+            new ControllerManagementCore(current.Options, _bridge, reloadHandler, stateProvider, _mutationGate, admissionProbe: () => IsStarted, telemetryProvider)));
     }
 
     /// <summary>Atomically swaps the options used by admission and core dispatch.</summary>
@@ -76,7 +79,7 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
         var current = Volatile.Read(ref _configuration);
         var reloadHandler = Volatile.Read(ref _reloadHandler);
         var stateProvider = Volatile.Read(ref _stateProvider);
-        var core = new ControllerManagementCore(options, _bridge, reloadHandler, stateProvider, _mutationGate, admissionProbe: () => IsStarted);
+        var core = new ControllerManagementCore(options, _bridge, reloadHandler, stateProvider, _mutationGate, admissionProbe: () => IsStarted, Volatile.Read(ref _telemetryProvider));
         Volatile.Write(ref _configuration, new DispatcherConfiguration(options, core));
         if (!string.Equals(current.Options.ApiKey, options.ApiKey, StringComparison.Ordinal))
         {

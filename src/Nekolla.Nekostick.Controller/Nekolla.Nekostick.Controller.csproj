@@ -9,6 +9,8 @@
     <Nullable>enable</Nullable>
     <LangVersion>14.0</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- Required by LibraryImport source-generated P/Invoke (host metrics samplers). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <AnalysisLevel>10.0-recommended</AnalysisLevel>
     <Deterministic>true</Deterministic>

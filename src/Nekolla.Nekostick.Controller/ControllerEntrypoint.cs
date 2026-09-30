@@ -135,7 +135,8 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
                 _runtime = runtime;
                 runtime.Dispatcher.ConfigureRuntimeCallbacks(
                     (expectedVersion, reloadCancellationToken) => ReloadSettingsAsync(context.Host, runtime, expectedVersion, reloadCancellationToken),
-                    runtime.GetStateAsync);
+                    runtime.GetStateAsync,
+                    runtime.GetTelemetryAsync);
             }
 
             var handlerFactory = _handlerFactory ?? new ControllerManagementHandlerFactory();

@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Nekolla.Nekostick.Contracts;
 using Nekolla.Nekostick.Controller.Adapters.Grpc;
 using Nekolla.Nekostick.Controller.Adapters.HttpUnix;
+using Nekolla.Nekostick.Controller.Management.Telemetry;
 
 namespace Nekolla.Nekostick.Controller.Management;
 
@@ -19,6 +20,7 @@ internal sealed class ControllerRuntime
     private bool _hostRouteRunning;
     private bool _resourceAcquisitionPending;
     private bool _stateReadFailureLogged;
+    private readonly ControllerTelemetrySampler _telemetrySampler = new(ControllerTelemetrySampler.CreatePlatformSampler());
     private readonly List<IControllerTransportAdapter> _startedAdapters = new();
     private IExtensionRegistration? _registration;
     private string? _handlerId;
@@ -72,6 +74,13 @@ internal sealed class ControllerRuntime
 
     /// <summary>Returns a non-secret snapshot for the controller state endpoint.</summary>
     internal ControllerStateDto GetState() => BuildState(Dispatcher.Options, _hostRouteRunning);
+
+    /// <summary>Returns a telemetry snapshot for the controller telemetry endpoint.</summary>
+    internal ValueTask<ControllerTelemetryDto> GetTelemetryAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(_telemetrySampler.Sample());
+    }
 
     /// <summary>Reads current HostRoute ownership before returning non-secret runtime state.</summary>
     internal async ValueTask<ControllerStateDto?> GetStateAsync(CancellationToken cancellationToken)

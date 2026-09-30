@@ -16,6 +16,7 @@ internal sealed partial class ControllerManagementCore
     private readonly IExtensionHostBridge? _bridge;
     private readonly Func<long, CancellationToken, ValueTask<ControllerManagementResponse>>? _reloadHandler;
     private readonly Func<CancellationToken, ValueTask<ControllerStateDto?>>? _stateProvider;
+    private readonly Func<CancellationToken, ValueTask<ControllerTelemetryDto>>? _telemetryProvider;
     private readonly SemaphoreSlim? _mutationGate;
     private readonly Func<bool>? _admissionProbe;
     private readonly HashSet<string> _loggedDispatchFailures = new(StringComparer.Ordinal);
@@ -27,7 +28,8 @@ internal sealed partial class ControllerManagementCore
         Func<long, CancellationToken, ValueTask<ControllerManagementResponse>>? reloadHandler = null,
         Func<CancellationToken, ValueTask<ControllerStateDto?>>? stateProvider = null,
         SemaphoreSlim? mutationGate = null,
-        Func<bool>? admissionProbe = null)
+        Func<bool>? admissionProbe = null,
+        Func<CancellationToken, ValueTask<ControllerTelemetryDto>>? telemetryProvider = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _bridge = bridge;
@@ -35,6 +37,7 @@ internal sealed partial class ControllerManagementCore
         _stateProvider = stateProvider;
         _mutationGate = mutationGate;
         _admissionProbe = admissionProbe;
+        _telemetryProvider = telemetryProvider;
     }
     /// <summary>
     /// Logs a dispatch failure that is being hidden behind a 503 response. Each distinct
@@ -183,6 +186,8 @@ internal sealed partial class ControllerManagementCore
     {
         if (path == ControllerManagementApiContract.StatePath)
             return method == "GET" ? await ReadStateAsync(request, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
+        if (path == ControllerManagementApiContract.TelemetryPath)
+            return method == "GET" ? await ReadTelemetryAsync(request, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
         if (path == ControllerManagementApiContract.ReloadSettingsPath)
             return method == "POST" ? await ReloadSettingsAsync(request, cancellationToken).ConfigureAwait(false) : ControllerManagementResponseBuilder.MethodNotAllowed;
         if (path == ControllerManagementApiContract.RootPath)
@@ -304,6 +309,21 @@ internal sealed partial class ControllerManagementCore
 
     private ValueTask<ConfigurationReadResult<HostConfigurationSnapshot>> ReadSnapshotAsync(CancellationToken cancellationToken) => _bridge!.FullConfiguration.ReadAsync(cancellationToken);
     private ValueTask<ConfigurationWriteResult> ReplaceAsync(long expectedVersion, ConfigurationChangeSet changes, CancellationToken cancellationToken) => _bridge!.FullConfiguration.ReplaceAsync(expectedVersion, changes, cancellationToken);
+
+    private async ValueTask<ControllerManagementResponse> ReadTelemetryAsync(
+        ControllerManagementRequest request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!RequireNoIfMatch(request) || !RequireEmptyBody(request))
+        {
+            return ControllerManagementResponseBuilder.InvalidRequest;
+        }
+
+        return _telemetryProvider is null
+            ? ControllerManagementResponseBuilder.Unavailable
+            : ControllerManagementResponseBuilder.SuccessUnversioned(await _telemetryProvider(cancellationToken).ConfigureAwait(false));
+    }
     private static ConfigurationChangeSet NewChanges(HostConfigurationSnapshot snapshot, GlobalSettingsConfiguration? globalSettings = null, ImmutableArray<RouteConfiguration>? routes = null, ImmutableArray<ServiceConfiguration>? services = null, ImmutableArray<ExtensionRecordConfiguration>? extensionRecords = null, ImmutableArray<ExtensionSettingsConfiguration>? extensionSettings = null) => new(globalSettings ?? snapshot.GlobalSettings, routes ?? snapshot.Routes, services ?? snapshot.Services, extensionRecords ?? snapshot.ExtensionRecords, extensionSettings ?? snapshot.ExtensionSettings);
     private bool HasFullConfigurationScope() => HasFullConfigurationScope(_options);
     private static bool HasFullConfigurationScope(ControllerOptions options) =>
