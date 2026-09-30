@@ -84,6 +84,16 @@ internal sealed partial class ControllerManagementCore
         if (method != expectedMethod) return ControllerManagementResponseBuilder.MethodNotAllowed;
         if (!RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
         if (ExtensionManagement is not { } management) return ControllerManagementResponseBuilder.Unsupported;
+        if (action == "disable" &&
+            _options.PreventSelfDisable &&
+            string.Equals(extensionId, ControllerOptions.ExtensionId, StringComparison.Ordinal))
+        {
+            // Self-disable takes the management API offline until someone flips the record back on
+            // the Host side; the operator opted into rejecting it via preventSelfDisable.
+            return ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                "The controller settings forbid disabling the controller extension itself.");
+        }
+
         if (action == "reload") return await ReloadExtensionAsync(request, management, extensionId, cancellationToken).ConfigureAwait(false);
         var write = action switch
         {

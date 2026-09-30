@@ -1,7 +1,9 @@
 using System.Linq;
+using System.Collections.Immutable;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Nekolla.Nekostick.Contracts;
 using Nekolla.Nekostick.Controller.Management;
 using Xunit;
@@ -521,5 +523,106 @@ public sealed class ExtensionsApi14Tests(ControllerApi14Fixture fixture) : IClas
         var data = document.RootElement.GetProperty("data");
         Assert.Equal(JsonValueKind.Null, data.GetProperty("reportedStatusKind").ValueKind);
         Assert.Equal(JsonValueKind.Null, data.GetProperty("reportedStatusCode").ValueKind);
+    }
+}
+
+public sealed class SelfDisableGuardApiTests(ControllerApiFixture fixture) : IClassFixture<ControllerApiFixture>
+{
+    [Fact]
+    public async Task SelfDisable_RejectedWhenPreventSelfDisableEnabled()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await SetPreventSelfDisableAsync(fixture, enabled: true);
+        using var client = fixture.CreateHttpClient();
+        var selfPath = $"/v1/extensions/{ControllerOptions.ExtensionId}";
+
+        using var blocked = await client.PostAsync($"{selfPath}/disable", content: null, cancellationToken);
+        Assert.Equal(HttpStatusCode.BadRequest, blocked.StatusCode);
+        using var blockedDocument = JsonDocument.Parse(await blocked.Content.ReadAsStringAsync(cancellationToken));
+        Assert.Equal("invalid_request", blockedDocument.RootElement.GetProperty("code").GetString());
+        Assert.Contains("forbid", blockedDocument.RootElement.GetProperty("message").GetString());
+
+        // Only disable is gated: other actions on the same id still reach the Host unchanged.
+        // The fixture has no controller record, so a 404 proves the request passed the gate.
+        using var reload = await client.PostAsync($"{selfPath}/reload", content: null, cancellationToken);
+        Assert.Equal(HttpStatusCode.NotFound, reload.StatusCode);
+        using var enable = await client.PostAsync($"{selfPath}/enable", content: null, cancellationToken);
+        Assert.Equal(HttpStatusCode.NotFound, enable.StatusCode);
+
+        using var other = await client.PostAsync($"/v1/extensions/{ControllerApiFixture.SpareExtensionId}/disable", content: null, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, other.StatusCode);
+    }
+
+    [Fact]
+    public async Task SelfDisable_AllowedByDefault()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await SetPreventSelfDisableAsync(fixture, enabled: false);
+        using var client = fixture.CreateHttpClient();
+
+        // The fixture has no controller record; a 404 proves the default-off gate did not fire.
+        using var response = await client.PostAsync($"/v1/extensions/{ControllerOptions.ExtensionId}/disable", content: null, cancellationToken);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        Assert.Equal("not_found", document.RootElement.GetProperty("code").GetString());
+    }
+
+    private static async Task SetPreventSelfDisableAsync(ControllerApiFixture fixture, bool enabled)
+    {
+        var snapshot = fixture.Host.ReadSnapshot();
+        var settings = snapshot.ExtensionSettings.Single(setting =>
+            string.Equals(setting.ExtensionId, ControllerOptions.ExtensionId, StringComparison.Ordinal));
+        var document = JsonNode.Parse(settings.SettingsJson)?.AsObject()
+            ?? throw new InvalidOperationException("The controller settings document is not an object.");
+        document["preventSelfDisable"] = enabled;
+        var updatedSettings = new ExtensionSettingsConfiguration(
+            settings.ExtensionId,
+            settings.SchemaVersion,
+            document.ToJsonString(),
+            settings.Version);
+        var replacement = snapshot.ExtensionSettings
+            .Select(setting => string.Equals(setting.ExtensionId, ControllerOptions.ExtensionId, StringComparison.Ordinal)
+                ? updatedSettings
+                : setting)
+            .ToImmutableArray();
+        var write = fixture.Host.ReplaceSnapshot(snapshot.Version, new ConfigurationChangeSet(
+            snapshot.GlobalSettings,
+            snapshot.Routes,
+            snapshot.Services,
+            snapshot.ExtensionRecords,
+            replacement));
+        Assert.True(write.IsSuccess);
+        Assert.NotNull(write.NewVersion);
+
+        using var client = fixture.CreateHttpClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/controller/reload-settings");
+        request.Headers.TryAddWithoutValidation(
+            ControllerManagementApiContract.IfMatchHeaderName,
+            $"\"{write.NewVersion!.Value}\"");
+        using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+}
+
+public sealed class ControllerSelfDisableSettingsTests
+{
+    [Fact]
+    public void ControllerOptions_PreventSelfDisableDefaultsFalseAndHonorsExplicitTrue()
+    {
+        var defaultSettings = new ExtensionSettingsConfiguration(
+            ControllerOptions.ExtensionId,
+            ControllerOptions.ConfigurationSchemaVersion,
+            "{}",
+            version: 0);
+        Assert.True(ControllerOptions.TryParseHostSettings(defaultSettings, out var defaults));
+        Assert.False((defaults ?? throw new InvalidOperationException("Default options were not parsed.")).PreventSelfDisable);
+
+        var enabledSettings = new ExtensionSettingsConfiguration(
+            ControllerOptions.ExtensionId,
+            ControllerOptions.ConfigurationSchemaVersion,
+            "{\"preventSelfDisable\":true}",
+            version: 1);
+        Assert.True(ControllerOptions.TryParseHostSettings(enabledSettings, out var enabled));
+        Assert.True((enabled ?? throw new InvalidOperationException("Enabled options were not parsed.")).PreventSelfDisable);
     }
 }

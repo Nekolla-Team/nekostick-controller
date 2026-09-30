@@ -446,6 +446,8 @@ extension record 是只读信息：
 
 `POST /v1/extensions/{id}/enable`、`POST /v1/extensions/{id}/disable`、`POST /v1/extensions/{id}/reload` 和 `DELETE /v1/extensions/{id}/record` 管理单个 extension record：启用、禁用、重载，以及级联删除记录（只删除记录，不删除磁盘上的扩展目录）。四者都要求请求 body 为空，不接受 `If-Match`，成功响应是无版本 envelope。未知 `{id}` 返回 `404 not_found`；reload 的目标 record 不处于 `Loaded` 时返回 `400 invalid_request`；Host 未提供管理能力时返回 `501 unsupported`。
 
+当 controller 的 extension settings 中 `preventSelfDisable` 为 `true` 时（缺省 `false`），对 controller 自身（`nekolla.nekostick.controller`）的 disable 会被拒绝并返回 `400 invalid_request`；enable、reload 和 record 删除不受影响。该开关防止意外禁用导致管理 API 整体下线。
+
 reload 成功的 `data` 是 `{"outcome": "..."}`：
 
 - 经 controller 自己的 listener（HTTP/JSON、Unix socket、gRPC）提交时为 `reloaded`，表示 Host 已完成本次 generation 替换；

@@ -137,6 +137,13 @@ public sealed class ControllerOptions
     /// <summary>Gets whether the embedded single-file Web UI is served by supported transports. Defaults to <see langword="true" />.</summary>
     public bool EnableWebUi { get; init; } = true;
 
+    /// <summary>
+    /// Gets whether the management API rejects attempts to disable the controller extension
+    /// itself. Defaults to <see langword="false" />; enable, reload, and record deletion are
+    /// never affected.
+    /// </summary>
+    public bool PreventSelfDisable { get; init; }
+
     /// <summary>Gets whether the Host-owned route adapter is enabled.</summary>
     public bool EnableHostRoute { get; init; }
 
@@ -258,6 +265,7 @@ public sealed class ControllerOptions
                 HostRoutePath = document.HostRoutePath,
                 LoopbackOnly = document.LoopbackOnly,
                 EnableWebUi = document.EnableWebUi,
+                PreventSelfDisable = document.PreventSelfDisable,
                 EnableHostRoute = document.EnableHostRoute,
                 EnableHttpJson = document.EnableHttpJson,
                 EnableGrpc = document.EnableGrpc,
@@ -409,6 +417,9 @@ public sealed class ControllerOptions
 
         [JsonPropertyName("enableWebUi")]
         public bool EnableWebUi { get; init; } = true;
+
+        [JsonPropertyName("preventSelfDisable")]
+        public bool PreventSelfDisable { get; init; }
 
         [JsonPropertyName("enableHostRoute")]
         public bool EnableHostRoute { get; init; }
