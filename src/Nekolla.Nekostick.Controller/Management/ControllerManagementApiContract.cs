@@ -31,6 +31,10 @@ public static class ControllerManagementApiContract
     public const string ServiceOutputStreamPath = "/v1/services/{id}/output/stream";
     /// <summary>Query parameter selecting the output stream (stdout or stderr).</summary>
     public const string ServiceOutputStreamQueryParameter = "stream";
+    /// <summary>Path suffix shared by every transport's service-output stream endpoint.</summary>
+    public const string ServiceOutputStreamSuffix = "/output/stream";
+    /// <summary>Media type of the Server-Sent Events framing used on the HostRoute transport.</summary>
+    public const string ServiceOutputEventStreamMediaType = "text/event-stream";
     /// <summary>
     /// <c>Sec-WebSocket-Protocol</c> token prefix that carries the base64url-encoded API key for
     /// browser WebSocket clients, which cannot set request headers on an upgrade.

@@ -11,6 +11,8 @@ namespace Nekolla.Nekostick.Controller.Management;
 internal sealed class ControllerStreamingManagementHandler : IExtensionStreamingHandler
 {
     private static readonly string[] HtmlContentType = new[] { "text/html" };
+    private static readonly string[] EventStreamContentType = new[] { ControllerManagementApiContract.ServiceOutputEventStreamMediaType };
+    private static readonly string[] NoStore = new[] { "no-store" };
     private static readonly string[] ZeroContentLength = new[] { "0" };
     private readonly IControllerManagementDispatcher _dispatcher;
     private readonly ControllerOptions _startupOptions;
@@ -73,6 +75,14 @@ internal sealed class ControllerStreamingManagementHandler : IExtensionStreaming
             string.Equals(request.Path, installPrefix + ControllerManagementApiContract.ExtensionsInstallPath, StringComparison.Ordinal))
         {
             return await HandleInstallAsync(request, currentOptions, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (string.Equals(request.Method, "GET", StringComparison.OrdinalIgnoreCase) &&
+            currentOptions.HostRoutePath is { } streamPrefix &&
+            IsServiceOutputStreamPath(request.Path, streamPrefix, out var logicalPath))
+        {
+            // The output-stream endpoint is long-lived; it never reaches the buffered fallback.
+            return await HandleServiceOutputStreamAsync(request, currentOptions, logicalPath, cancellationToken).ConfigureAwait(false);
         }
 
         var rentedBody = ArrayPool<byte>.Shared.Rent(ControllerAdmissionLimits.MaximumRequestBodyBytes + 1);
@@ -141,6 +151,166 @@ internal sealed class ControllerStreamingManagementHandler : IExtensionStreaming
         }
 
         return ToStreamingResponse(response, corsOrigin);
+    }
+
+    /// <summary>
+    /// Serves the service-output stream endpoint as Server-Sent Events. HostRoute cannot express a
+    /// WebSocket upgrade, so this transport always answers with an SSE stream.
+    /// </summary>
+    private async ValueTask<ExtensionStreamingResponse> HandleServiceOutputStreamAsync(
+        ExtensionStreamingRequest request,
+        ControllerOptions currentOptions,
+        string logicalPath,
+        CancellationToken cancellationToken)
+    {
+        var headerDictionary = request.Headers
+            .GroupBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.SelectMany(static pair => pair.Value).ToImmutableArray(),
+                StringComparer.OrdinalIgnoreCase);
+        var corsOrigin = ControllerManagementHandler.MatchAllowedOrigin(currentOptions, headerDictionary);
+
+        if (!TryParseServiceOutputStreamRequest(request.Path, logicalPath, out var serviceId, out var outputStream))
+        {
+            return ToStreamingResponse(ControllerManagementResponse.InvalidRequest, corsOrigin);
+        }
+
+        var presentedKey = ControllerManagementHandler.ReadApiKey(headerDictionary);
+        if (!ControllerAdmissionLimits.TryCreateRequest(
+                ControllerTransport.HostRoute,
+                request.Method,
+                logicalPath,
+                presentedKey,
+                request.Headers.Select(static pair => new KeyValuePair<string, IEnumerable<string>>(pair.Key, pair.Value)),
+                ReadOnlyMemory<byte>.Empty,
+                out var admittedRequest) ||
+            admittedRequest is null)
+        {
+            return ToStreamingResponse(ControllerManagementResponse.InvalidRequest, corsOrigin);
+        }
+
+        ControllerServiceOutputStreamResult result;
+        try
+        {
+            result = await _dispatcher.DispatchServiceOutputStreamAsync(admittedRequest, serviceId, outputStream, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            result = ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponse.Unavailable);
+        }
+
+        if (result.Stream is not { } output)
+        {
+            return ToStreamingResponse(result.Rejection ?? ControllerManagementResponse.Unavailable, corsOrigin);
+        }
+
+        try
+        {
+            var eventStream = ServiceOutputEventStream.Start(output, result.SessionEnded);
+            var headers = new List<KeyValuePair<string, IEnumerable<string>>>(4)
+            {
+                new("content-type", EventStreamContentType),
+                new("cache-control", NoStore)
+            };
+            if (corsOrigin is not null)
+            {
+                ControllerManagementHandler.AppendCorsHeaders(headers, corsOrigin);
+            }
+
+            return new ExtensionStreamingResponse(StatusCodes.Status200OK, headers, eventStream);
+        }
+        catch
+        {
+            await output.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Determines whether one HostRoute path (query included) structurally targets the
+    /// service-output stream endpoint, and yields the prefix-free logical path.
+    /// </summary>
+    private static bool IsServiceOutputStreamPath(string requestPath, string hostRoutePrefix, out string logicalPath)
+    {
+        logicalPath = string.Empty;
+        if (!requestPath.StartsWith(hostRoutePrefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var remainder = requestPath[hostRoutePrefix.Length..];
+        var queryIndex = remainder.IndexOf('?');
+        var pathOnly = queryIndex < 0 ? remainder : remainder[..queryIndex];
+        if (!pathOnly.StartsWith(ControllerManagementApiContract.ServicesPath + "/", StringComparison.Ordinal) ||
+            !pathOnly.EndsWith(ControllerManagementApiContract.ServiceOutputStreamSuffix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        logicalPath = pathOnly;
+        return true;
+    }
+
+    /// <summary>Parses the service identifier and stream selection from one output-stream path.</summary>
+    private static bool TryParseServiceOutputStreamRequest(
+        string requestPath,
+        string logicalPath,
+        out Guid serviceId,
+        out ExtensionServiceOutputStream outputStream)
+    {
+        serviceId = Guid.Empty;
+        outputStream = ExtensionServiceOutputStream.Stdout;
+
+        var servicesPrefix = ControllerManagementApiContract.ServicesPath + "/";
+        var idText = logicalPath[servicesPrefix.Length..^ControllerManagementApiContract.ServiceOutputStreamSuffix.Length];
+        if (!Guid.TryParseExact(idText, "D", out serviceId))
+        {
+            return false;
+        }
+
+        var queryIndex = requestPath.IndexOf('?');
+        if (queryIndex < 0)
+        {
+            return true;
+        }
+
+        var seenStream = false;
+        foreach (var pair in requestPath[(queryIndex + 1)..].Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var separator = pair.IndexOf('=');
+            var name = separator < 0 ? pair : pair[..separator];
+            if (!string.Equals(name, "stream", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (seenStream || separator < 0)
+            {
+                return false;
+            }
+
+            seenStream = true;
+            var value = pair[(separator + 1)..];
+            if (string.Equals(value, "stdout", StringComparison.OrdinalIgnoreCase))
+            {
+                outputStream = ExtensionServiceOutputStream.Stdout;
+            }
+            else if (string.Equals(value, "stderr", StringComparison.OrdinalIgnoreCase))
+            {
+                outputStream = ExtensionServiceOutputStream.Stderr;
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static async ValueTask<int> ReadBodyAsync(

@@ -4,9 +4,12 @@ import { useRoute } from 'vue-router'
 import { NButton, NRadioButton, NRadioGroup, NSpace, NTag } from 'naive-ui'
 import { connection } from '../stores/connection'
 import {
+  buildServiceOutputEventStreamUrl,
   buildServiceOutputUrl,
   classifyCloseCode,
   encodeKeySubProtocol,
+  openServiceOutputEventStream,
+  type ServiceOutputEventStreamHandle,
   type ServiceOutputStreamKind,
 } from '../api/serviceOutput'
 import { t } from '../i18n'
@@ -25,6 +28,7 @@ const logElement = ref<HTMLElement | null>(null)
 // The stream is live-only and potentially unbounded; retain a rolling tail of decoded text.
 const maxRetainedChars = 256 * 1024
 let socket: WebSocket | null = null
+let sseHandle: ServiceOutputEventStreamHandle | null = null
 let decoder: TextDecoder | null = null
 let stickToBottom = true
 
@@ -58,9 +62,11 @@ function appendOutput(chunk: string): void {
   }
 }
 
-function closeSocket(): void {
+function closeTransport(): void {
   const current = socket
+  const sse = sseHandle
   socket = null
+  sseHandle = null
   decoder = null
   if (
     current &&
@@ -69,10 +75,50 @@ function closeSocket(): void {
     // Closing the socket is the unsubscribe signal; the server disposes the Host stream.
     current.close()
   }
+  sse?.close()
+}
+
+/**
+ * HostRoute cannot carry a WebSocket upgrade, so a socket that fails before opening falls back
+ * to the SSE transport, which authenticates with a fetch header over the same path.
+ */
+function connectEventStream(apiKey: string, active: TextDecoder): void {
+  const url = buildServiceOutputEventStreamUrl(serviceId.value, stream.value)
+  if (!url) {
+    status.value = 'error'
+    closeReason.value = t('serviceOutput.closed.abnormal')
+    return
+  }
+
+  const handle = openServiceOutputEventStream(url, apiKey, {
+    onOpen: () => {
+      if (sseHandle === handle) status.value = 'live'
+    },
+    onChunk: (bytes) => {
+      if (sseHandle === handle) appendOutput(active.decode(bytes, { stream: true }))
+    },
+    onEnd: (reason) => {
+      if (sseHandle !== handle) return
+      sseHandle = null
+      appendOutput(active.decode())
+      if (decoder === active) decoder = null
+      closeReason.value = t(`serviceOutput.closed.${reason}`)
+      status.value = 'closed'
+    },
+    onFailure: () => {
+      if (sseHandle !== handle) return
+      sseHandle = null
+      appendOutput(active.decode())
+      if (decoder === active) decoder = null
+      closeReason.value = t('serviceOutput.closed.abnormal')
+      status.value = 'error'
+    },
+  })
+  sseHandle = handle
 }
 
 function connect(): void {
-  closeSocket()
+  closeTransport()
   closeReason.value = null
   truncated.value = false
 
@@ -90,9 +136,12 @@ function connect(): void {
   const ws = new WebSocket(url, [encodeKeySubProtocol(apiKey)])
   socket = ws
   ws.binaryType = 'arraybuffer'
+  let opened = false
 
   ws.onopen = () => {
-    if (socket === ws) status.value = 'live'
+    if (socket !== ws) return
+    opened = true
+    status.value = 'live'
   }
   ws.onmessage = (event) => {
     if (socket !== ws) return
@@ -101,16 +150,24 @@ function connect(): void {
     appendOutput(active.decode(bytes, { stream: true }))
   }
   ws.onerror = () => {
-    if (socket === ws && status.value === 'connecting') status.value = 'error'
+    // A socket that never opened means the transport cannot serve upgrades; fall back to SSE.
+    if (socket === ws && !opened) {
+      socket = null
+      connectEventStream(apiKey, active)
+    }
   }
   ws.onclose = (event) => {
     if (socket !== ws) return
     socket = null
+    if (!opened) {
+      connectEventStream(apiKey, active)
+      return
+    }
     appendOutput(active.decode())
     if (decoder === active) decoder = null
     const kind = classifyCloseCode(event.code)
     closeReason.value = t(`serviceOutput.closed.${kind}`, { code: event.code })
-    if (status.value !== 'error') status.value = 'closed'
+    status.value = 'closed'
   }
 }
 
@@ -130,7 +187,7 @@ function onScroll(): void {
 }
 
 watch(stream, () => connect())
-onBeforeUnmount(() => closeSocket())
+onBeforeUnmount(() => closeTransport())
 connect()
 </script>
 

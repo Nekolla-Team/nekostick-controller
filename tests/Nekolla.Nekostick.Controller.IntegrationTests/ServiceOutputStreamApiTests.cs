@@ -244,6 +244,120 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
         }
     }
 
+    [Fact]
+    public async Task HostRoute_OutputStream_SseDeliversBase64ChunksAndEndEventOnProcessExit()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var serviceId = Guid.CreateVersion7();
+        var payload = Encoding.UTF8.GetBytes("hello\nworld\n");
+        fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
+            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(payload)));
+
+        var response = await InvokeHostRouteStreamAsync(
+            $"/v1/services/{serviceId}/output/stream?stream=stdout", withApiKey: true, cancellationToken);
+        Assert.Equal(200, response.StatusCode);
+        var contentType = Assert.Single(response.Headers
+            .Where(pair => string.Equals(pair.Key, "content-type", StringComparison.OrdinalIgnoreCase))
+            .SelectMany(pair => pair.Value));
+        Assert.StartsWith(ControllerManagementApiContract.ServiceOutputEventStreamMediaType, contentType);
+
+        await using (response.BodyStream.ConfigureAwait(false))
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(10));
+            var body = await new StreamReader(response.BodyStream).ReadToEndAsync(timeout.Token);
+            Assert.Contains($"data:{Convert.ToBase64String(payload)}\n\n", body);
+            Assert.Contains("event:end\ndata:{\"reason\":\"processExited\"}\n\n", body);
+        }
+
+        var open = Assert.Single(fixture.Host.ServiceOutputFake.Opens, entry => entry.ServiceId == serviceId);
+        Assert.Equal(ExtensionServiceOutputStream.Stdout, open.Stream);
+    }
+
+    [Fact]
+    public async Task HostRoute_OutputStream_SseStderrQuerySelectsStderr()
+    {
+        var serviceId = Guid.CreateVersion7();
+        fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
+            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(Array.Empty<byte>())));
+
+        var response = await InvokeHostRouteStreamAsync(
+            $"/v1/services/{serviceId}/output/stream?stream=stderr", withApiKey: true, TestContext.Current.CancellationToken);
+        Assert.Equal(200, response.StatusCode);
+        await response.BodyStream.DisposeAsync();
+
+        var open = Assert.Single(fixture.Host.ServiceOutputFake.Opens, entry => entry.ServiceId == serviceId);
+        Assert.Equal(ExtensionServiceOutputStream.Stderr, open.Stream);
+    }
+
+    [Fact]
+    public async Task HostRoute_OutputStream_RequiresApiKey()
+    {
+        var response = await InvokeHostRouteStreamAsync(
+            $"/v1/services/{Guid.CreateVersion7()}/output/stream", withApiKey: false, TestContext.Current.CancellationToken);
+        Assert.Equal(401, response.StatusCode);
+        using var document = await JsonDocument.ParseAsync(response.BodyStream, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("unauthorized", document.RootElement.GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task HostRoute_OutputStream_UnknownServiceReturnsNotFound()
+    {
+        var serviceId = Guid.CreateVersion7();
+        fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
+            new ExtensionServiceOutputStreamResult(false, ExtensionServiceOutputCode.NotFound, id, null));
+
+        var response = await InvokeHostRouteStreamAsync(
+            $"/v1/services/{serviceId}/output/stream", withApiKey: true, TestContext.Current.CancellationToken);
+        Assert.Equal(404, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task HostRoute_OutputStream_NotRunningReturnsConflict()
+    {
+        var serviceId = Guid.CreateVersion7();
+        fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
+            new ExtensionServiceOutputStreamResult(false, ExtensionServiceOutputCode.NotRunning, id, null));
+
+        var response = await InvokeHostRouteStreamAsync(
+            $"/v1/services/{serviceId}/output/stream", withApiKey: true, TestContext.Current.CancellationToken);
+        Assert.Equal(409, response.StatusCode);
+        using var document = await JsonDocument.ParseAsync(response.BodyStream, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("not_running", document.RootElement.GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task HostRoute_OutputStream_InvalidStreamQueryRejected()
+    {
+        var response = await InvokeHostRouteStreamAsync(
+            $"/v1/services/{Guid.CreateVersion7()}/output/stream?stream=bogus", withApiKey: true, TestContext.Current.CancellationToken);
+        Assert.Equal(400, response.StatusCode);
+    }
+
+    private async Task<ExtensionStreamingResponse> InvokeHostRouteStreamAsync(
+        string logicalPathAndQuery,
+        bool withApiKey,
+        CancellationToken cancellationToken)
+    {
+        var handler = fixture.Registration.StreamingHandler
+            ?? throw new InvalidOperationException("The streaming HostRoute handler is not registered.");
+        var headers = withApiKey
+            ? new[]
+            {
+                new KeyValuePair<string, IEnumerable<string>>(
+                    ControllerManagementApiContract.ApiKeyHeaderName,
+                    new[] { ControllerApiFixture.ApiKey })
+            }
+            : Enumerable.Empty<KeyValuePair<string, IEnumerable<string>>>();
+        return await handler.HandleStreamingAsync(
+            new ExtensionStreamingRequest(
+                "GET",
+                ControllerApiFixture.HostRoutePrefix + logicalPathAndQuery,
+                headers,
+                Stream.Null),
+            cancellationToken);
+    }
+
 }
 
 /// <summary>Host API 1.3.x has no service-output capability; the endpoint must answer 501.</summary>
