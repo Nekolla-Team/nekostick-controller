@@ -1,6 +1,7 @@
 export const serviceRuntime = {
   title: 'Service runtime status',
   snapshotTitle: 'Runtime snapshot',
+  unavailable: 'No runtime status is currently available; the service may not be running',
   status: {
     lifecycle: 'Lifecycle: {state}',
     waiting: 'Waiting',

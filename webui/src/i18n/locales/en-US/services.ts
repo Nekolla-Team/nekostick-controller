@@ -13,6 +13,7 @@ export const services = {
   columns: {
     file: 'File',
     owner: 'Owner',
+    status: 'Status',
     startMode: 'Start mode',
     restartPolicy: 'Restart policy',
     healthCheck: 'Health check',

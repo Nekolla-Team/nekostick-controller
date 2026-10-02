@@ -1,6 +1,7 @@
 export const serviceRuntime = {
   title: '服务运行状态',
   snapshotTitle: '运行时快照',
+  unavailable: '当前没有可获取的运行时状态，服务可能未在运行',
   status: {
     lifecycle: '生命周期：{state}',
     waiting: '等待中',

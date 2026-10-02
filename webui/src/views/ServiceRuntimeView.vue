@@ -6,6 +6,7 @@ import {
   NCard,
   NDescriptions,
   NDescriptionsItem,
+  NEmpty,
   NPopconfirm,
   NSpin,
   NSpace,
@@ -14,11 +15,13 @@ import {
 } from 'naive-ui'
 import ApiErrorAlert from '../components/ApiErrorAlert.vue'
 import {
+  getAllRuntime,
   getRuntime,
   restartServiceRuntime,
   resumeServiceRuntime,
 } from '../api/resources/services'
-import type { ServiceHealthState, ServiceLifecycleState } from '../api/types'
+import { ApiClientError } from '../api/client'
+import { healthTagType, lifecycleLabel, lifecycleTagType } from '../serviceStatus'
 import { useRoute } from 'vue-router'
 import { t } from '../i18n'
 
@@ -26,14 +29,31 @@ const route = useRoute()
 const queryClient = useQueryClient()
 const message = useMessage()
 const serviceId = computed(() => String(route.params.id ?? ''))
+const runtimeListQuery = useQuery({
+  queryKey: ['services', 'runtime'],
+  queryFn: getAllRuntime,
+  retry: false,
+  refetchInterval: 3000,
+  refetchIntervalInBackground: false,
+})
+// A service only has a runtime snapshot while the supervisor tracks an active generation;
+// fetching one in any other state answers 404, so skip the request and show a placeholder.
+const runtimeListed = computed(() => {
+  const list = runtimeListQuery.data.value
+  if (!list) return null
+  return list.some(item => item.serviceId === serviceId.value)
+})
 const runtimeQuery = useQuery({
   queryKey: computed(() => ['services', serviceId.value, 'runtime']),
   queryFn: () => getRuntime(serviceId.value),
-  enabled: computed(() => serviceId.value.length > 0),
+  enabled: computed(() => serviceId.value.length > 0 && runtimeListed.value !== false),
   refetchInterval: 3000,
   refetchIntervalInBackground: false,
 })
 const snapshot = computed(() => runtimeQuery.data.value)
+const runtimeNotFound = computed(() =>
+  runtimeQuery.error.value instanceof ApiClientError && runtimeQuery.error.value.status === 404)
+const runtimeUnavailable = computed(() => runtimeListed.value === false || runtimeNotFound.value)
 
 const runtimeMutation = useMutation({
   mutationFn: ({ id, action }: { id: string; action: 'resume' | 'restart' }) =>
@@ -54,23 +74,6 @@ const runtimeMutation = useMutation({
     }
   },
 })
-
-function lifecycleType(state: ServiceLifecycleState): 'default' | 'success' | 'warning' | 'error' {
-  if (state === 'Running') return 'success'
-  if (state === 'Starting' || state === 'Stopping' || state === 'waiting') return 'warning'
-  if (state === 'Failed') return 'error'
-  return 'default'
-}
-
-function lifecycleLabel(state: ServiceLifecycleState): string {
-  return state === 'waiting' ? t('serviceRuntime.status.waiting') : state
-}
-
-function healthType(state: ServiceHealthState): 'default' | 'success' | 'warning' | 'error' {
-  if (state === 'Healthy') return 'success'
-  if (state === 'Unhealthy') return 'error'
-  return 'default'
-}
 
 function humanizeUptime(uptimeMs: number | null): string {
   if (uptimeMs === null || !Number.isFinite(uptimeMs)) return t('common.unknown')
@@ -135,15 +138,18 @@ function openOutputWindow(): void {
         </n-button>
       </n-space>
     </header>
-    <ApiErrorAlert v-if="runtimeQuery.isError.value" :error="runtimeQuery.error.value" />
+    <ApiErrorAlert v-if="runtimeQuery.isError.value && !runtimeNotFound" :error="runtimeQuery.error.value" />
     <ApiErrorAlert v-if="runtimeMutation.isError.value" :error="runtimeMutation.error.value" />
     <n-spin :show="runtimeQuery.isLoading.value">
-      <n-card v-if="snapshot" :title="t('serviceRuntime.snapshotTitle')">
+      <n-card v-if="runtimeUnavailable">
+        <n-empty :description="t('serviceRuntime.unavailable')" />
+      </n-card>
+      <n-card v-else-if="snapshot" :title="t('serviceRuntime.snapshotTitle')">
         <n-space wrap>
-          <n-tag :type="lifecycleType(snapshot.lifecycleState)">
+          <n-tag :type="lifecycleTagType(snapshot.lifecycleState)">
             {{ t('serviceRuntime.status.lifecycle', { state: lifecycleLabel(snapshot.lifecycleState) }) }}
           </n-tag>
-          <n-tag :type="healthType(snapshot.healthState)">
+          <n-tag :type="healthTagType(snapshot.healthState)">
             {{ t('serviceRuntime.status.health', { state: snapshot.healthState }) }}
           </n-tag>
         </n-space>

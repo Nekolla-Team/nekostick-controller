@@ -47,8 +47,10 @@ import type {
   ServiceDto,
   ServicePatchBody,
   ServiceRestartPolicy,
+  ServiceRuntimeSnapshot,
   ServiceStartMode,
 } from '../api/types'
+import { healthTagType, lifecycleLabel, lifecycleTagType } from '../serviceStatus'
 import { useCas } from '../composables/useCas'
 import { t } from '../i18n'
 
@@ -74,12 +76,12 @@ const queryClient = useQueryClient()
 const cas = useCas(queryClient)
 const servicesQuery = useQuery({ queryKey: ['services'], queryFn: listServices })
 const rows = computed(() => servicesQuery.data.value ?? [])
-// Runtime telemetry is the only surface that carries the owning extension; the endpoint is
-// unavailable on hosts older than API 1.3, in which case the owner column stays empty.
+// Runtime telemetry carries the owning extension and the live lifecycle/health state; the
+// endpoint is unavailable on hosts older than API 1.3, in which case both columns stay empty.
 const runtimesQuery = useQuery({ queryKey: ['services', 'runtime'], queryFn: getAllRuntime, retry: false })
-const ownerByServiceId = computed(() => {
-  const map = new Map<string, string | null>()
-  for (const snapshot of runtimesQuery.data.value ?? []) map.set(snapshot.serviceId, snapshot.ownerExtensionId)
+const runtimeByServiceId = computed(() => {
+  const map = new Map<string, ServiceRuntimeSnapshot>()
+  for (const snapshot of runtimesQuery.data.value ?? []) map.set(snapshot.serviceId, snapshot)
   return map
 })
 const showForm = ref(false)
@@ -340,7 +342,24 @@ const columns = computed<DataTableColumns<ServiceDto>>(() => [
   { title: t('services.columns.file'), key: 'fileName' },
   {
     title: t('services.columns.owner'), key: 'owner',
-    render: (row) => ownerByServiceId.value.get(row.id) ?? '—',
+    render: (row) => runtimeByServiceId.value.get(row.id)?.ownerExtensionId ?? '—',
+  },
+  {
+    title: t('services.columns.status'), key: 'status',
+    render: (row) => {
+      const runtime = runtimeByServiceId.value.get(row.id)
+      if (!runtime) return '—'
+      return h(NSpace, { size: 4, wrap: false }, {
+        default: () => [
+          h(NTag, { size: 'small', type: lifecycleTagType(runtime.lifecycleState) }, {
+            default: () => lifecycleLabel(runtime.lifecycleState),
+          }),
+          h(NTag, { size: 'small', type: healthTagType(runtime.healthState) }, {
+            default: () => runtime.healthState,
+          }),
+        ],
+      })
+    },
   },
   {
     title: t('common.enabled'), key: 'enabled', width: 80,
