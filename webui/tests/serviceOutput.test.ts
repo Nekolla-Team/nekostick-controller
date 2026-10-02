@@ -156,4 +156,31 @@ describe('service output event stream', () => {
     expect(failure).toEqual({ kind: 'truncated' });
     vi.unstubAllGlobals();
   });
+
+  it('surfaces the controller error envelope code on http failures', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ code: 'not_running', message: 'no live output' }), {
+            status: 409,
+            headers: { 'content-type': 'application/json' },
+          }),
+      ),
+    );
+
+    let failure: ServiceOutputEventStreamFailure | null = null;
+    const handle = openServiceOutputEventStream('http://x/stream', 'key', {
+      onOpen: () => undefined,
+      onChunk: () => undefined,
+      onEnd: () => undefined,
+      onFailure: (reason) => {
+        failure = reason;
+      },
+    });
+    await handle.done;
+
+    expect(failure).toEqual({ kind: 'http', status: 409, code: 'not_running' });
+    vi.unstubAllGlobals();
+  });
 });

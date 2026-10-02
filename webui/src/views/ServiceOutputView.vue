@@ -9,6 +9,7 @@ import {
   classifyCloseCode,
   encodeKeySubProtocol,
   openServiceOutputEventStream,
+  type ServiceOutputEventStreamFailure,
   type ServiceOutputEventStreamHandle,
   type ServiceOutputStreamKind,
 } from '../api/serviceOutput'
@@ -105,16 +106,37 @@ function connectEventStream(apiKey: string, active: TextDecoder): void {
       closeReason.value = t(`serviceOutput.closed.${reason}`)
       status.value = 'closed'
     },
-    onFailure: () => {
+    onFailure: (failure) => {
       if (sseHandle !== handle) return
       sseHandle = null
       appendOutput(active.decode())
       if (decoder === active) decoder = null
-      closeReason.value = t('serviceOutput.closed.abnormal')
+      closeReason.value = describeStreamFailure(failure)
       status.value = 'error'
     },
   })
   sseHandle = handle
+}
+
+/** Map an SSE transport failure onto a specific, localized reason for the status banner. */
+function describeStreamFailure(failure: ServiceOutputEventStreamFailure): string {
+  if (failure.kind === 'network') return t('serviceOutput.failed.network')
+  if (failure.kind === 'truncated') return t('serviceOutput.failed.interrupted')
+  switch (failure.code) {
+    case 'not_running':
+      return t('serviceOutput.failed.notRunning')
+    case 'not_found':
+      return t('serviceOutput.failed.notFound')
+    case 'unauthorized':
+      return t('serviceOutput.failed.unauthorized')
+    case 'unsupported':
+      return t('serviceOutput.failed.unsupported')
+    case 'unavailable':
+    case 'storage_unavailable':
+      return t('serviceOutput.failed.unavailable')
+    default:
+      return t('serviceOutput.failed.http', { status: failure.status })
+  }
 }
 
 function connect(): void {

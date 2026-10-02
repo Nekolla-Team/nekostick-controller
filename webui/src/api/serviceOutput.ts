@@ -59,7 +59,7 @@ export function buildServiceOutputEventStreamUrl(
 export type ServiceOutputEndReason = 'processExited' | 'sessionEnded' | 'fault';
 
 export type ServiceOutputEventStreamFailure =
-  | { kind: 'http'; status: number }
+  | { kind: 'http'; status: number; code?: string }
   | { kind: 'network' }
   | { kind: 'truncated' };
 
@@ -99,7 +99,11 @@ export function openServiceOutputEventStream(
     }
 
     if (!response.ok || !response.body) {
-      handlers.onFailure({ kind: 'http', status: response.status });
+      handlers.onFailure({
+        kind: 'http',
+        status: response.status,
+        code: response.ok ? undefined : await readServiceOutputErrorCode(response),
+      });
       return;
     }
 
@@ -152,6 +156,22 @@ export function openServiceOutputEventStream(
     close: () => abort.abort(),
     done,
   };
+}
+
+/**
+ * Best-effort extraction of the controller error envelope's `code` from a failed response;
+ * transport-level errors (proxy pages, empty 400s) carry no envelope and yield undefined.
+ */
+async function readServiceOutputErrorCode(response: Response): Promise<string | undefined> {
+  try {
+    const body: unknown = await response.json();
+    if (body !== null && typeof body === 'object' && 'code' in body && typeof body.code === 'string') {
+      return body.code;
+    }
+  } catch {
+    // Not an envelope body; nothing more to report.
+  }
+  return undefined;
 }
 
 /** Decode one base64 SSE data frame into raw output bytes. */
