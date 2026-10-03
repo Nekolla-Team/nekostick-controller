@@ -52,6 +52,7 @@ import type {
 } from '../api/types'
 import { healthTagType, lifecycleLabel, lifecycleTagType } from '../serviceStatus'
 import { useCas } from '../composables/useCas'
+import { useServiceRuntimeFeed } from '../composables/useServiceRuntimeFeed'
 import { t } from '../i18n'
 
 interface ServiceForm {
@@ -74,11 +75,18 @@ const router = useRouter()
 
 const queryClient = useQueryClient()
 const cas = useCas(queryClient)
+const runtimeFeed = useServiceRuntimeFeed()
 const servicesQuery = useQuery({ queryKey: ['services'], queryFn: listServices })
 const rows = computed(() => servicesQuery.data.value ?? [])
 // Runtime telemetry carries the owning extension and the live lifecycle/health state; the
 // endpoint is unavailable on hosts older than API 1.3, in which case both columns stay empty.
-const runtimesQuery = useQuery({ queryKey: ['services', 'runtime'], queryFn: getAllRuntime, retry: false })
+const runtimesQuery = useQuery({
+  queryKey: ['services', 'runtime'],
+  queryFn: getAllRuntime,
+  retry: false,
+  refetchInterval: computed(() => runtimeFeed.pollingEnabled.value ? 3000 : false),
+  refetchIntervalInBackground: false,
+})
 const runtimeByServiceId = computed(() => {
   const map = new Map<string, ServiceRuntimeSnapshot>()
   for (const snapshot of runtimesQuery.data.value ?? []) map.set(snapshot.serviceId, snapshot)

@@ -5,7 +5,14 @@ export const serviceRuntime = {
   status: {
     lifecycle: '生命周期：{state}',
     waiting: '等待中',
+    stopped: '已停止',
     health: '健康：{state}',
+  },
+  failure: {
+    title: '故障详情',
+    reason: '故障原因：{reason}',
+    code: '故障代码：{code}',
+    stage: '故障阶段：{stage}',
   },
   actions: {
     restart: '重启',
@@ -34,6 +41,7 @@ export const serviceRuntime = {
     startedAt: '启动时间',
     lastUpdatedAt: '最后更新时间',
     lastHealthAt: '最近健康检查时间',
+    retryAt: '下次重试时间',
     owner: '属主扩展',
   },
 } as const

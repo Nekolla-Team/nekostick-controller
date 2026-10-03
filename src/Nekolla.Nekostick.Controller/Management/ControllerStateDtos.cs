@@ -85,6 +85,8 @@ public sealed class ControllerHostInfoDto
     [JsonPropertyName("lastSnapshotStateAt")] public DateTimeOffset? LastSnapshotStateAt { get; init; }
     /// <summary>Current host readiness state.</summary>
     [JsonPropertyName("readiness")] public ControllerHostReadinessState Readiness { get; init; }
+    /// <summary>Identity that committed the published configuration (extension id or host component); null on hosts without write attribution.</summary>
+    [JsonPropertyName("committedBy")] public string? CommittedBy { get; set; }
 }
 
 /// <summary>Contains the embedded Web UI availability and serving state.</summary>

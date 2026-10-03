@@ -48,6 +48,8 @@ public class ControllerApiFixture : IAsyncLifetime
     private string _socketDirectory = string.Empty;
 
     public FakeHostBridge Host => _host ?? throw new InvalidOperationException("The fixture has not been initialized.");
+    /// <summary>Configures the fake Host before the controller subscribes to its APIs.</summary>
+    protected virtual void ConfigureHost(FakeHostBridge host) { }
 
     public FakeExtensionRegistration Registration { get; } = new();
 
@@ -133,6 +135,7 @@ public class ControllerApiFixture : IAsyncLifetime
                     now,
                     recordVersion: 1)),
             extensionSettings: ImmutableArray.Create(settings)), _hostApiVersion);
+        ConfigureHost(_host);
 
         var options = new ControllerOptions
         {

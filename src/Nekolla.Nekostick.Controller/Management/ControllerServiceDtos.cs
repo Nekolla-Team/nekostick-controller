@@ -55,6 +55,89 @@ public sealed class ControllerServiceRuntimeReadDto
     [JsonPropertyName("lastHealthAt")] public DateTimeOffset? LastHealthAt { get; init; }
     /// <summary>Owning extension identifier; null for Host-owned services.</summary>
     [JsonPropertyName("ownerExtensionId")] public string? OwnerExtensionId { get; init; }
+    /// <summary>Failure stage name (Spawn, HealthProbe, ProcessExit) when the host reports enriched runtime state.</summary>
+    [JsonPropertyName("failureStage")] public string? FailureStage { get; set; }
+    /// <summary>Machine-readable failure code when the host reports enriched runtime state.</summary>
+    [JsonPropertyName("failureCode")] public string? FailureCode { get; set; }
+    /// <summary>Human-readable failure reason when the host reports enriched runtime state.</summary>
+    [JsonPropertyName("failureReason")] public string? FailureReason { get; set; }
+    /// <summary>Exit code of the last process generation when known.</summary>
+    [JsonPropertyName("processExitCode")] public int? ProcessExitCode { get; set; }
+    /// <summary>Number of restart attempts consumed; null on hosts without enriched runtime state.</summary>
+    [JsonPropertyName("restartCount")] public int? RestartCount { get; set; }
+    /// <summary>UTC time at which the current lifecycle state was entered when known.</summary>
+    [JsonPropertyName("stateEnteredAt")] public DateTimeOffset? StateEnteredAt { get; set; }
+    /// <summary>UTC time of the next scheduled retry when the host reports one.</summary>
+    [JsonPropertyName("retryAt")] public DateTimeOffset? RetryAt { get; set; }
+    /// <summary>Latest health-probe observation when the host reports enriched runtime state.</summary>
+    [JsonPropertyName("lastProbe")] public ControllerServiceProbeReadDto? LastProbe { get; set; }
+}
+
+/// <summary>Contains one host health-probe observation.</summary>
+public sealed class ControllerServiceProbeReadDto
+{
+    /// <summary>UTC time the probe was observed.</summary>
+    [JsonPropertyName("observedAt")] public DateTimeOffset ObservedAt { get; init; }
+    /// <summary>Probe result name (Healthy, Unhealthy, TimedOut, Unavailable, Cancelled, Unknown).</summary>
+    [JsonPropertyName("result")] public string Result { get; init; } = string.Empty;
+    /// <summary>Probe target (for example the HTTP URL) when known.</summary>
+    [JsonPropertyName("target")] public string? Target { get; init; }
+    /// <summary>Machine-readable failure code when the probe failed.</summary>
+    [JsonPropertyName("failureCode")] public string? FailureCode { get; init; }
+    /// <summary>Human-readable probe error detail when available.</summary>
+    [JsonPropertyName("errorMessage")] public string? ErrorMessage { get; init; }
+}
+
+/// <summary>One entry of the service runtime-state feed (initial replay or live change).</summary>
+public sealed class ControllerServiceRuntimeFeedEntryDto
+{
+    /// <summary>Monotonic host-assigned feed sequence.</summary>
+    [JsonPropertyName("sequence")] public long Sequence { get; init; }
+    /// <summary>Entry kind: snapshot for state upserts, removed for removals.</summary>
+    [JsonPropertyName("kind")] public string Kind { get; init; } = string.Empty;
+    /// <summary>Service the entry describes.</summary>
+    [JsonPropertyName("serviceId")] public Guid ServiceId { get; init; }
+    /// <summary>Whether the entry belongs to the subscriber's initial state replay.</summary>
+    [JsonPropertyName("isInitialSnapshot")] public bool IsInitialSnapshot { get; init; }
+    /// <summary>Owning extension identifier of the service; null for host-owned services.</summary>
+    [JsonPropertyName("ownerExtensionId")] public string? OwnerExtensionId { get; init; }
+    /// <summary>Latest runtime state; null on removed entries.</summary>
+    [JsonPropertyName("snapshot")] public ControllerServiceRuntimeReadDto? Snapshot { get; init; }
+}
+
+/// <summary>One entry of a service log feed: an output chunk or a lifecycle event.</summary>
+public sealed class ControllerServiceLogEntryDto
+{
+    /// <summary>Entry kind: output, generationStarted, processExited, startupFailed, currentState, gap, or termination.</summary>
+    [JsonPropertyName("kind")] public string Kind { get; init; } = string.Empty;
+    /// <summary>Host-assigned feed sequence used as the resume cursor; null when the entry carries none.</summary>
+    [JsonPropertyName("sequence")] public long? Sequence { get; init; }
+    /// <summary>UTC time at which the host recorded the entry.</summary>
+    [JsonPropertyName("timestamp")] public DateTimeOffset Timestamp { get; init; }
+    /// <summary>Output stream name (stdout or stderr); only set on output entries.</summary>
+    [JsonPropertyName("stream")] public string? Stream { get; init; }
+    /// <summary>Base64-encoded output bytes; only set on output entries.</summary>
+    [JsonPropertyName("data")] public string? Data { get; init; }
+    /// <summary>Process generation the entry belongs to when known.</summary>
+    [JsonPropertyName("processInstanceId")] public Guid? ProcessInstanceId { get; init; }
+    /// <summary>1-based attempt number of the process generation when known.</summary>
+    [JsonPropertyName("attemptNumber")] public int? AttemptNumber { get; init; }
+    /// <summary>Exit code of a completed process generation.</summary>
+    [JsonPropertyName("processExitCode")] public int? ProcessExitCode { get; init; }
+    /// <summary>Lifecycle state name carried by state entries.</summary>
+    [JsonPropertyName("lifecycleState")] public string? LifecycleState { get; init; }
+    /// <summary>Failure stage name when the entry describes a failure.</summary>
+    [JsonPropertyName("failureStage")] public string? FailureStage { get; init; }
+    /// <summary>Machine-readable failure code when the entry describes a failure.</summary>
+    [JsonPropertyName("failureCode")] public string? FailureCode { get; init; }
+    /// <summary>Human-readable failure detail when the entry describes a failure.</summary>
+    [JsonPropertyName("failureReason")] public string? FailureReason { get; init; }
+    /// <summary>First sequence dropped before a gap entry.</summary>
+    [JsonPropertyName("firstMissingSequence")] public long? FirstMissingSequence { get; init; }
+    /// <summary>Last sequence dropped before a gap entry.</summary>
+    [JsonPropertyName("lastMissingSequence")] public long? LastMissingSequence { get; init; }
+    /// <summary>Why the feed ended; only set on termination entries.</summary>
+    [JsonPropertyName("terminationReason")] public string? TerminationReason { get; init; }
 }
 
 /// <summary>Read representation of a node-local service runtime action outcome.</summary>

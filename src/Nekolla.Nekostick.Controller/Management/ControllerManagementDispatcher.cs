@@ -30,6 +30,7 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
     private Func<long, CancellationToken, ValueTask<ControllerManagementResponse>>? _reloadHandler;
     private Func<CancellationToken, ValueTask<ControllerStateDto?>>? _stateProvider;
     private Func<CancellationToken, ValueTask<ControllerTelemetryDto>>? _telemetryProvider;
+    private ControllerRuntimeStateFeed? _runtimeFeed;
     private int _state;
 
     /// <summary>Creates an admission dispatcher without a Host bridge.</summary>
@@ -43,13 +44,16 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
     {
         ArgumentNullException.ThrowIfNull(options);
         _bridge = bridge;
-        _configuration = new DispatcherConfiguration(options, new ControllerManagementCore(options, bridge, mutationGate: _mutationGate, admissionProbe: () => IsStarted));
+        _configuration = new DispatcherConfiguration(options, new ControllerManagementCore(options, bridge, mutationGate: _mutationGate, admissionProbe: () => IsStarted, runtimeFeedProvider: () => Volatile.Read(ref _runtimeFeed)));
     }
 
     /// <inheritdoc />
     public void Dispose()
     {
         _mutationGate.Dispose();
+        // Sync-over-async is acceptable at process teardown: the feed dispose only completes
+        // subscriber channels and releases the host subscription.
+        _runtimeFeed?.DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 
     /// <summary>Gets whether the dispatcher is accepting authenticated requests.</summary>
@@ -69,7 +73,7 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
         var current = Volatile.Read(ref _configuration);
         Volatile.Write(ref _configuration, new DispatcherConfiguration(
             current.Options,
-            new ControllerManagementCore(current.Options, _bridge, reloadHandler, stateProvider, _mutationGate, admissionProbe: () => IsStarted, telemetryProvider)));
+            new ControllerManagementCore(current.Options, _bridge, reloadHandler, stateProvider, _mutationGate, admissionProbe: () => IsStarted, telemetryProvider, runtimeFeedProvider: () => Volatile.Read(ref _runtimeFeed))));
     }
 
     /// <summary>Atomically swaps the options used by admission and core dispatch.</summary>
@@ -79,7 +83,7 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
         var current = Volatile.Read(ref _configuration);
         var reloadHandler = Volatile.Read(ref _reloadHandler);
         var stateProvider = Volatile.Read(ref _stateProvider);
-        var core = new ControllerManagementCore(options, _bridge, reloadHandler, stateProvider, _mutationGate, admissionProbe: () => IsStarted, Volatile.Read(ref _telemetryProvider));
+        var core = new ControllerManagementCore(options, _bridge, reloadHandler, stateProvider, _mutationGate, admissionProbe: () => IsStarted, Volatile.Read(ref _telemetryProvider), runtimeFeedProvider: () => Volatile.Read(ref _runtimeFeed));
         Volatile.Write(ref _configuration, new DispatcherConfiguration(options, core));
         if (!string.Equals(current.Options.ApiKey, options.ApiKey, StringComparison.Ordinal))
         {
@@ -100,7 +104,7 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
     internal SemaphoreSlim MutationGate => _mutationGate;
 
     /// <summary>Starts admission without binding any listener.</summary>
-    internal ValueTask StartAsync(CancellationToken cancellationToken)
+    internal async ValueTask StartAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var configuration = Volatile.Read(ref _configuration);
@@ -110,14 +114,19 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
             throw new InvalidOperationException("Controller options are invalid.");
         }
 
+        if (_bridge is not null)
+        {
+            // The feed is best-effort: hosts without the runtime-state capability leave it null and
+            // the feed endpoint answers 501.
+            _runtimeFeed = await ControllerRuntimeStateFeed.TryStartAsync(_bridge, cancellationToken).ConfigureAwait(false);
+        }
+
         Interlocked.Exchange(ref _state, 1);
         var sessionSource = Volatile.Read(ref _sessionSource);
         if (sessionSource.IsCancellationRequested)
         {
             Interlocked.CompareExchange(ref _sessionSource, new CancellationTokenSource(), sessionSource);
         }
-
-        return ValueTask.CompletedTask;
     }
 
     /// <summary>Stops admission idempotently.</summary>
@@ -226,6 +235,75 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
                 .ConfigureAwait(false);
             return result.Stream is { } opened
                 ? ControllerServiceOutputStreamResult.Opened(opened, sessionEnded)
+                : result;
+        }
+        finally
+        {
+            EndDispatch();
+        }
+    }
+
+    /// <inheritdoc />
+    public ControllerRuntimeFeedResult DispatchServiceRuntimeFeed(
+        ControllerManagementRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        Interlocked.Increment(ref _inFlight);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsStarted)
+            {
+                return ControllerRuntimeFeedResult.Rejected(ControllerManagementResponseBuilder.Unavailable);
+            }
+
+            var configuration = Volatile.Read(ref _configuration);
+            if (Admit(request, configuration.Options) is { } rejection)
+            {
+                return ControllerRuntimeFeedResult.Rejected(rejection);
+            }
+
+            var result = configuration.Core.OpenServiceRuntimeFeed();
+            return result.View is not null
+                ? ControllerRuntimeFeedResult.Opened(result.View, Volatile.Read(ref _sessionSource).Token)
+                : result;
+        }
+        finally
+        {
+            EndDispatch();
+        }
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<ControllerServiceLogFeedResult> DispatchServiceLogFeedAsync(
+        ControllerManagementRequest request,
+        Guid serviceId,
+        long? sinceSequence,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        Interlocked.Increment(ref _inFlight);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsStarted)
+            {
+                return ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.Unavailable);
+            }
+
+            var configuration = Volatile.Read(ref _configuration);
+            if (Admit(request, configuration.Options) is { } rejection)
+            {
+                return ControllerServiceLogFeedResult.Rejected(rejection);
+            }
+
+            var sessionEnded = Volatile.Read(ref _sessionSource).Token;
+            var result = await configuration.Core
+                .OpenServiceLogFeedAsync(serviceId, sinceSequence, cancellationToken)
+                .ConfigureAwait(false);
+            return result.Feed is { } opened
+                ? ControllerServiceLogFeedResult.Opened(opened, sessionEnded)
                 : result;
         }
         finally

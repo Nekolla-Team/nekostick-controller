@@ -2,9 +2,12 @@ using System.Collections.Immutable;
 using System.Runtime.InteropServices;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Net;
 using System.Net.WebSockets;
 using System.Text;
+using System.Text.Json;
+using System.Threading.Channels;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -412,6 +415,15 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
             return;
         }
 
+        // The runtime-state feed is a plain SSE GET; it never upgrades and has no request body to
+        // bound, so it runs before the buffered-body admission path.
+        if (string.Equals(context.Request.Method, "GET", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(requestPath, ControllerManagementApiContract.ServiceRuntimeFeedPath, StringComparison.Ordinal))
+        {
+            await HandleServiceRuntimeFeedAsync(context, dispatcher, requestPath, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         if (context.Request.ContentLength is > ControllerAdmissionLimits.MaximumRequestBodyBytes)
         {
             await WriteResponseAsync(context, ControllerManagementResponse.InvalidRequest, cancellationToken)
@@ -547,7 +559,7 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
             return;
         }
 
-        if (!TryParseOutputStreamQuery(context.Request.Query, out var outputStream) ||
+        if (!TryParseOutputStreamQuery(context.Request.Query, out var outputStream, out var sinceSequence) ||
             !TryCopyHeaders(context.Request.Headers, out var headers, out var apiKey))
         {
             await WriteResponseAsync(context, ControllerManagementResponse.InvalidRequest, cancellationToken).ConfigureAwait(false);
@@ -575,6 +587,58 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
             request is null)
         {
             await WriteResponseAsync(context, ControllerManagementResponse.InvalidRequest, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        ControllerServiceLogFeedResult logResult;
+        try
+        {
+            logResult = await dispatcher.DispatchServiceLogFeedAsync(request, serviceId, sinceSequence, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch
+        {
+            logResult = ControllerServiceLogFeedResult.Rejected(ControllerManagementResponse.Unavailable);
+        }
+
+        if (logResult.Rejection?.Code == ControllerDispatchCode.Unsupported)
+        {
+            if (logResult.Feed is { } unsupportedFeed)
+            {
+                await unsupportedFeed.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+        else
+        {
+            if (logResult.Feed is not { } feed)
+            {
+                await WriteResponseAsync(
+                    context,
+                    logResult.Rejection ?? ControllerManagementResponse.Unavailable,
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            try
+            {
+                await PumpServiceLogAsync(context, feed, logResult.SessionEnded).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // The peer dropped between the open and the upgrade; the pump already detached the feed.
+            }
+            catch (WebSocketException)
+            {
+                // The upgrade failed after the feed opened; the pump's async-disposal scope detached it.
+            }
+            catch (IOException)
+            {
+                // The connection was torn down while the feed was being upgraded or closed.
+            }
+
             return;
         }
 
@@ -612,6 +676,79 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
         catch (WebSocketException)
         {
             // The upgrade failed after the stream opened; the pump's using scope detached it.
+        }
+    }
+
+    /// <summary>
+    /// Pumps the node-local runtime-state feed into one SSE response until the session ends, the
+    /// peer disconnects, or the listener stops. The feed view detaches when the event stream is
+    /// disposed on the way out.
+    /// </summary>
+    private async Task HandleServiceRuntimeFeedAsync(
+        HttpContext context,
+        IControllerManagementDispatcher dispatcher,
+        string requestPath,
+        CancellationToken cancellationToken)
+    {
+        if (!TryCopyHeaders(context.Request.Headers, out var headers, out var apiKey))
+        {
+            await WriteResponseAsync(context, ControllerManagementResponse.InvalidRequest, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (!ControllerAdmissionLimits.TryCreateRequest(
+                _transport,
+                "GET",
+                requestPath,
+                apiKey,
+                headers,
+                ReadOnlyMemory<byte>.Empty,
+                out var request) ||
+            request is null)
+        {
+            await WriteResponseAsync(context, ControllerManagementResponse.InvalidRequest, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        ControllerRuntimeFeedResult result;
+        try
+        {
+            result = dispatcher.DispatchServiceRuntimeFeed(request, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch
+        {
+            result = ControllerRuntimeFeedResult.Rejected(ControllerManagementResponse.Unavailable);
+        }
+
+        if (result.View is not { } view)
+        {
+            await WriteResponseAsync(context, result.Rejection ?? ControllerManagementResponse.Unavailable, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.ContentType = ControllerManagementApiContract.ServiceOutputEventStreamMediaType;
+        context.Response.Headers.CacheControl = "no-store";
+
+        using var aborted = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, context.RequestAborted);
+        try
+        {
+            await using var eventStream = ControllerRuntimeFeedEventStream.Start(view, result.SessionEnded);
+            var buffer = new byte[16 * 1024];
+            int read;
+            while ((read = await eventStream.ReadAsync(buffer, aborted.Token).ConfigureAwait(false)) > 0)
+            {
+                await context.Response.Body.WriteAsync(buffer.AsMemory(0, read), aborted.Token).ConfigureAwait(false);
+                await context.Response.Body.FlushAsync(aborted.Token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (aborted.IsCancellationRequested)
+        {
+            // Client disconnect or listener stop; the stream disposal already detached the view.
         }
     }
 
@@ -736,6 +873,165 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
                     {
                         // The peer stopped reading; the close frame could not leave in time.
                     }
+                }
+
+                try
+                {
+                    await closeTask.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    // The peer never answered the close frame; cancel the abandoned receive.
+                }
+                catch (WebSocketException)
+                {
+                }
+                catch (IOException)
+                {
+                }
+
+                watchStop.Cancel();
+                closeSource.Cancel();
+                try
+                {
+                    await closeTask.WaitAsync(TimeSpan.FromSeconds(1), CancellationToken.None).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // The receive observes a torn-down connection; nothing left to recover.
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Pumps one cross-generation service-log feed into WebSocket frames until its termination
+    /// entry, the peer disconnects, the session ends, or the listener stops.
+    /// </summary>
+    private static async Task PumpServiceLogAsync(
+        HttpContext context,
+        ControllerServiceLogFeed feed,
+        CancellationToken sessionEnded)
+    {
+        await using (feed.ConfigureAwait(false))
+        {
+            var stopping = context.RequestServices
+                .GetService<IHostApplicationLifetime>()?.ApplicationStopping ?? CancellationToken.None;
+            using var hardStop = CancellationTokenSource.CreateLinkedTokenSource(
+                context.RequestAborted,
+                stopping,
+                sessionEnded);
+            if (hardStop.IsCancellationRequested)
+            {
+                return;
+            }
+
+            WebSocket socket;
+            try
+            {
+                socket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (hardStop.IsCancellationRequested)
+            {
+                return;
+            }
+
+            using var socketScope = socket;
+            using var closeSource = CancellationTokenSource.CreateLinkedTokenSource(hardStop.Token);
+            using var watchStop = new CancellationTokenSource();
+            var closeTask = ReceiveClientCloseAsync(socket, closeSource, watchStop.Token);
+            var closeStatus = WebSocketCloseStatus.NormalClosure;
+            var closeDescription = "ended";
+            try
+            {
+                while (!closeSource.IsCancellationRequested)
+                {
+                    ControllerServiceLogFeedItem item;
+                    try
+                    {
+                        item = await feed.Reader.ReadAsync(closeSource.Token).ConfigureAwait(false);
+                    }
+                    catch (ChannelClosedException)
+                    {
+                        break;
+                    }
+
+                    if (string.Equals(item.Entry.Kind, "output", StringComparison.Ordinal))
+                    {
+                        if (item.Data.IsDefaultOrEmpty)
+                        {
+                            continue;
+                        }
+
+                        var data = ImmutableCollectionsMarshal.AsArray(item.Data)!;
+                        await socket.SendAsync(
+                            data.AsMemory(0, item.Data.Length),
+                            WebSocketMessageType.Binary,
+                            endOfMessage: true,
+                            hardStop.Token).ConfigureAwait(false);
+                        continue;
+                    }
+
+                    var json = JsonSerializer.SerializeToUtf8Bytes(item.Entry, ControllerManagementJson.Options);
+                    await socket.SendAsync(
+                        json.AsMemory(),
+                        WebSocketMessageType.Text,
+                        endOfMessage: true,
+                        hardStop.Token).ConfigureAwait(false);
+                    if (string.Equals(item.Entry.Kind, "termination", StringComparison.Ordinal))
+                    {
+                        closeDescription = item.Entry.TerminationReason ?? "ended";
+                        break;
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (closeSource.IsCancellationRequested)
+            {
+                // The peer closed, the session ended, or the listener stopped.
+            }
+            catch (WebSocketException)
+            {
+            }
+            catch (IOException)
+            {
+            }
+            finally
+            {
+                if (!hardStop.IsCancellationRequested)
+                {
+                    if (closeSource.IsCancellationRequested)
+                    {
+                        closeDescription = "The client closed the session.";
+                    }
+
+                    using var closeTimeout = CancellationTokenSource.CreateLinkedTokenSource(hardStop.Token);
+                    closeTimeout.CancelAfter(TimeSpan.FromSeconds(5));
+                    try
+                    {
+                        if (socket.State == WebSocketState.Open)
+                        {
+                            await socket.CloseOutputAsync(closeStatus, closeDescription, closeTimeout.Token).ConfigureAwait(false);
+                        }
+                        else if (socket.State == WebSocketState.CloseReceived)
+                        {
+                            await socket.CloseAsync(closeStatus, closeDescription, closeTimeout.Token).ConfigureAwait(false);
+                        }
+                    }
+                    catch (WebSocketException)
+                    {
+                    }
+                    catch (IOException)
+                    {
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // The peer stopped reading; the close frame could not leave in time.
+                    }
+                }
+
+                if (hardStop.IsCancellationRequested)
+                {
+                    watchStop.Cancel();
                 }
 
                 try
@@ -895,31 +1191,47 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
         return Guid.TryParse(idText, out serviceId);
     }
 
-    private static bool TryParseOutputStreamQuery(IQueryCollection query, out ExtensionServiceOutputStream stream)
+    private static bool TryParseOutputStreamQuery(
+        IQueryCollection query,
+        out ExtensionServiceOutputStream stream,
+        out long? sinceSequence)
     {
         stream = ExtensionServiceOutputStream.Stdout;
-        var values = query[ControllerManagementApiContract.ServiceOutputStreamQueryParameter];
-        if (values.Count == 0)
-        {
-            return true;
-        }
-
-        if (values.Count != 1)
+        sinceSequence = null;
+        var streamValues = query[ControllerManagementApiContract.ServiceOutputStreamQueryParameter];
+        if (streamValues.Count > 1)
         {
             return false;
         }
 
-        if (string.Equals(values[0], "stdout", StringComparison.OrdinalIgnoreCase))
+        if (streamValues.Count == 1)
         {
-            return true;
+            if (string.Equals(streamValues[0], "stderr", StringComparison.OrdinalIgnoreCase))
+            {
+                stream = ExtensionServiceOutputStream.Stderr;
+            }
+            else if (!string.Equals(streamValues[0], "stdout", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
         }
 
-        if (!string.Equals(values[0], "stderr", StringComparison.OrdinalIgnoreCase))
+        var sinceValues = query["since"];
+        if (sinceValues.Count > 1)
         {
             return false;
         }
 
-        stream = ExtensionServiceOutputStream.Stderr;
+        if (sinceValues.Count == 1)
+        {
+            if (!long.TryParse(sinceValues[0], NumberStyles.None, CultureInfo.InvariantCulture, out var sequence) || sequence < 0)
+            {
+                return false;
+            }
+
+            sinceSequence = sequence;
+        }
+
         return true;
     }
 

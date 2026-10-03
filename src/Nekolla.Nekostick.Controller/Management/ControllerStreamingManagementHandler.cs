@@ -85,6 +85,14 @@ internal sealed class ControllerStreamingManagementHandler : IExtensionStreaming
             return await HandleServiceOutputStreamAsync(request, currentOptions, logicalPath, cancellationToken).ConfigureAwait(false);
         }
 
+        if (string.Equals(request.Method, "GET", StringComparison.OrdinalIgnoreCase) &&
+            currentOptions.HostRoutePath is { } feedPrefix &&
+            string.Equals(request.Path, feedPrefix + ControllerManagementApiContract.ServiceRuntimeFeedPath, StringComparison.Ordinal))
+        {
+            // The runtime-state feed is long-lived; it never reaches the buffered fallback.
+            return await HandleServiceRuntimeFeedAsync(request, currentOptions, cancellationToken).ConfigureAwait(false);
+        }
+
         var rentedBody = ArrayPool<byte>.Shared.Rent(ControllerAdmissionLimits.MaximumRequestBodyBytes + 1);
         try
         {
@@ -171,9 +179,18 @@ internal sealed class ControllerStreamingManagementHandler : IExtensionStreaming
                 StringComparer.OrdinalIgnoreCase);
         var corsOrigin = ControllerManagementHandler.MatchAllowedOrigin(currentOptions, headerDictionary);
 
-        if (!TryParseServiceOutputStreamRequest(request.Path, logicalPath, out var serviceId, out var outputStream))
+        if (!TryParseServiceOutputStreamRequest(request.Path, logicalPath, out var serviceId, out var outputStream, out var sinceSequence))
         {
             return ToStreamingResponse(ControllerManagementResponse.InvalidRequest, corsOrigin);
+        }
+
+        if (sinceSequence is null &&
+            headerDictionary.TryGetValue("Last-Event-ID", out var lastEventIds) &&
+            lastEventIds.Length == 1 &&
+            long.TryParse(lastEventIds[0], NumberStyles.None, CultureInfo.InvariantCulture, out var headerSequence) &&
+            headerSequence >= 0)
+        {
+            sinceSequence = headerSequence;
         }
 
         var presentedKey = ControllerManagementHandler.ReadApiKey(headerDictionary);
@@ -188,6 +205,65 @@ internal sealed class ControllerStreamingManagementHandler : IExtensionStreaming
             admittedRequest is null)
         {
             return ToStreamingResponse(ControllerManagementResponse.InvalidRequest, corsOrigin);
+        }
+
+        ControllerServiceLogFeedResult logResult;
+        try
+        {
+            logResult = await _dispatcher.DispatchServiceLogFeedAsync(admittedRequest, serviceId, sinceSequence, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            logResult = ControllerServiceLogFeedResult.Rejected(ControllerManagementResponse.Unavailable);
+        }
+
+        if (logResult.Rejection?.Code == ControllerDispatchCode.Unsupported)
+        {
+            if (logResult.Feed is { } unsupportedFeed)
+            {
+                await unsupportedFeed.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+        else
+        {
+            if (logResult.Feed is not { } feed)
+            {
+                return ToStreamingResponse(logResult.Rejection ?? ControllerManagementResponse.Unavailable, corsOrigin);
+            }
+
+            ServiceLogEventStream? eventStream = null;
+            try
+            {
+                eventStream = ServiceLogEventStream.Start(feed, logResult.SessionEnded);
+                var headers = new List<KeyValuePair<string, IEnumerable<string>>>(4)
+                {
+                    new("content-type", EventStreamContentType),
+                    new("cache-control", NoStore)
+                };
+                if (corsOrigin is not null)
+                {
+                    ControllerManagementHandler.AppendCorsHeaders(headers, corsOrigin);
+                }
+
+                return new ExtensionStreamingResponse(StatusCodes.Status200OK, headers, eventStream);
+            }
+            catch
+            {
+                if (eventStream is null)
+                {
+                    await feed.DisposeAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    await eventStream.DisposeAsync().ConfigureAwait(false);
+                }
+
+                throw;
+            }
         }
 
         ControllerServiceOutputStreamResult result;
@@ -232,6 +308,78 @@ internal sealed class ControllerStreamingManagementHandler : IExtensionStreaming
     }
 
     /// <summary>
+    /// Serves the node-local runtime-state feed as Server-Sent Events over HostRoute. The host
+    /// copies the returned stream to the client; disposing it detaches the feed view.
+    /// </summary>
+    private async ValueTask<ExtensionStreamingResponse> HandleServiceRuntimeFeedAsync(
+        ExtensionStreamingRequest request,
+        ControllerOptions currentOptions,
+        CancellationToken cancellationToken)
+    {
+        var headerDictionary = request.Headers
+            .GroupBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.SelectMany(static pair => pair.Value).ToImmutableArray(),
+                StringComparer.OrdinalIgnoreCase);
+        var corsOrigin = ControllerManagementHandler.MatchAllowedOrigin(currentOptions, headerDictionary);
+
+        var presentedKey = ControllerManagementHandler.ReadApiKey(headerDictionary);
+        if (!ControllerAdmissionLimits.TryCreateRequest(
+                ControllerTransport.HostRoute,
+                "GET",
+                ControllerManagementApiContract.ServiceRuntimeFeedPath,
+                presentedKey,
+                request.Headers.Select(static pair => new KeyValuePair<string, IEnumerable<string>>(pair.Key, pair.Value)),
+                ReadOnlyMemory<byte>.Empty,
+                out var admittedRequest) ||
+            admittedRequest is null)
+        {
+            return ToStreamingResponse(ControllerManagementResponse.InvalidRequest, corsOrigin);
+        }
+
+        ControllerRuntimeFeedResult result;
+        try
+        {
+            result = _dispatcher.DispatchServiceRuntimeFeed(admittedRequest, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            result = ControllerRuntimeFeedResult.Rejected(ControllerManagementResponse.Unavailable);
+        }
+
+        if (result.View is not { } view)
+        {
+            return ToStreamingResponse(result.Rejection ?? ControllerManagementResponse.Unavailable, corsOrigin);
+        }
+
+        try
+        {
+            var eventStream = ControllerRuntimeFeedEventStream.Start(view, result.SessionEnded);
+            var headers = new List<KeyValuePair<string, IEnumerable<string>>>(4)
+            {
+                new("content-type", EventStreamContentType),
+                new("cache-control", NoStore)
+            };
+            if (corsOrigin is not null)
+            {
+                ControllerManagementHandler.AppendCorsHeaders(headers, corsOrigin);
+            }
+
+            return new ExtensionStreamingResponse(StatusCodes.Status200OK, headers, eventStream);
+        }
+        catch
+        {
+            view.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Determines whether one HostRoute path (query included) structurally targets the
     /// service-output stream endpoint, and yields the prefix-free logical path.
     /// </summary>
@@ -256,15 +404,17 @@ internal sealed class ControllerStreamingManagementHandler : IExtensionStreaming
         return true;
     }
 
-    /// <summary>Parses the service identifier and stream selection from one output-stream path.</summary>
+    /// <summary>Parses the service identifier, stream selection, and resume cursor from one output-stream path.</summary>
     private static bool TryParseServiceOutputStreamRequest(
         string requestPath,
         string logicalPath,
         out Guid serviceId,
-        out ExtensionServiceOutputStream outputStream)
+        out ExtensionServiceOutputStream outputStream,
+        out long? sinceSequence)
     {
         serviceId = Guid.Empty;
         outputStream = ExtensionServiceOutputStream.Stdout;
+        sinceSequence = null;
 
         var servicesPrefix = ControllerManagementApiContract.ServicesPath + "/";
         var idText = logicalPath[servicesPrefix.Length..^ControllerManagementApiContract.ServiceOutputStreamSuffix.Length];
@@ -280,34 +430,53 @@ internal sealed class ControllerStreamingManagementHandler : IExtensionStreaming
         }
 
         var seenStream = false;
+        var seenSince = false;
         foreach (var pair in requestPath[(queryIndex + 1)..].Split('&', StringSplitOptions.RemoveEmptyEntries))
         {
             var separator = pair.IndexOf('=');
             var name = separator < 0 ? pair : pair[..separator];
-            if (!string.Equals(name, "stream", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(name, "stream", StringComparison.OrdinalIgnoreCase))
+            {
+                if (seenStream || separator < 0)
+                {
+                    return false;
+                }
+
+                seenStream = true;
+                var value = pair[(separator + 1)..];
+                if (string.Equals(value, "stdout", StringComparison.OrdinalIgnoreCase))
+                {
+                    outputStream = ExtensionServiceOutputStream.Stdout;
+                }
+                else if (string.Equals(value, "stderr", StringComparison.OrdinalIgnoreCase))
+                {
+                    outputStream = ExtensionServiceOutputStream.Stderr;
+                }
+                else
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (!string.Equals(name, "since", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            if (seenStream || separator < 0)
+            if (seenSince || separator < 0)
             {
                 return false;
             }
 
-            seenStream = true;
-            var value = pair[(separator + 1)..];
-            if (string.Equals(value, "stdout", StringComparison.OrdinalIgnoreCase))
-            {
-                outputStream = ExtensionServiceOutputStream.Stdout;
-            }
-            else if (string.Equals(value, "stderr", StringComparison.OrdinalIgnoreCase))
-            {
-                outputStream = ExtensionServiceOutputStream.Stderr;
-            }
-            else
+            seenSince = true;
+            if (!long.TryParse(pair[(separator + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out var sequence) || sequence < 0)
             {
                 return false;
             }
+
+            sinceSequence = sequence;
         }
 
         return true;

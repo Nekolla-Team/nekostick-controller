@@ -26,6 +26,29 @@ internal sealed partial class ControllerManagementCore
         return ControllerManagementResponseBuilder.SuccessUnversioned(snapshots);
     }
 
+    /// <summary>
+    /// Opens one consumer view over the node-local runtime-state feed. Read-only and long-lived by
+    /// design, so it is not gated on the mutation gate. Answers 501 when the host lacks the
+    /// runtime-state subscription capability.
+    /// </summary>
+    internal ControllerRuntimeFeedResult OpenServiceRuntimeFeed()
+    {
+        if (_bridge is null)
+        {
+            return ControllerRuntimeFeedResult.Rejected(ControllerManagementResponseBuilder.Unavailable);
+        }
+
+        if (!HasFullConfigurationScope() || !ExtensionHostApiSupport.IsApi13Supported(_bridge.ApiVersion))
+        {
+            return ControllerRuntimeFeedResult.Rejected(ControllerManagementResponseBuilder.Unsupported);
+        }
+
+        var feed = _runtimeFeedProvider?.Invoke();
+        return feed is null
+            ? ControllerRuntimeFeedResult.Rejected(ControllerManagementResponseBuilder.Unsupported)
+            : ControllerRuntimeFeedResult.Opened(feed.Subscribe());
+    }
+
     private async ValueTask<ControllerManagementResponse> ReadServiceRuntimeAsync(ControllerManagementRequest request, Guid serviceId, CancellationToken cancellationToken)
     {
         if (!RequireNoIfMatch(request) || !RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;

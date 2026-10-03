@@ -45,6 +45,30 @@ internal static class ExtensionHostApiSupport
     internal static bool IsApi14Supported(HostApiVersion host) =>
         ExtensionAbi.IsCompatible(Api14MinimumHostVersion, host);
 
+    /// <summary>
+    /// Gets whether the loaded Contracts assembly carries the enriched runtime-state detail members
+    /// (failure stage/code/reason, probe snapshot, restart count). String-based reflection keeps the probe
+    /// safe when the host loaded an older Contracts assembly.
+    /// </summary>
+    internal static readonly bool RuntimeStateDetailsAvailable =
+        typeof(ExtensionServiceRuntimeSnapshot).GetProperty("FailureReason") is not null;
+
+    /// <summary>Gets whether the loaded Contracts assembly carries the ordered service-log feed subscription.</summary>
+    internal static readonly bool ServiceLogFeedAvailable = ProbeServiceLogFeed();
+
+    /// <summary>Gets whether the loaded Contracts assembly carries the runtime-state push subscription.</summary>
+    internal static readonly bool ServiceRuntimeStateFeedAvailable =
+        typeof(IExtensionHostBridge14).GetProperty("ServiceRuntimeState") is not null;
+
+    /// <summary>Gets whether the loaded Contracts assembly carries configuration write attribution.</summary>
+    internal static readonly bool SnapshotCommittedByAvailable =
+        typeof(HostConfigurationSnapshot).GetProperty("CommittedBy") is not null;
+
+    private static bool ProbeServiceLogFeed() =>
+        typeof(IExtensionServiceOutputApi).GetMethods().Any(method =>
+            method.Name == "SubscribeAsync" &&
+            method.GetParameters() is [_, { ParameterType.Name: "IExtensionServiceLogSink" }, ..]);
+
     /// <summary>Determines whether the negotiated host exposes the API 1.3 sibling bridge.</summary>
     /// <param name="host">The negotiated host API version.</param>
     /// <returns><see langword="true" /> only for a compatible API 1.3.1-or-later host in major generation 1.</returns>

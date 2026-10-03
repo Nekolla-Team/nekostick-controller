@@ -18,6 +18,7 @@ internal sealed partial class ControllerManagementCore
     private readonly Func<CancellationToken, ValueTask<ControllerStateDto?>>? _stateProvider;
     private readonly Func<CancellationToken, ValueTask<ControllerTelemetryDto>>? _telemetryProvider;
     private readonly SemaphoreSlim? _mutationGate;
+    private readonly Func<ControllerRuntimeStateFeed?>? _runtimeFeedProvider;
     private readonly Func<bool>? _admissionProbe;
     private readonly HashSet<string> _loggedDispatchFailures = new(StringComparer.Ordinal);
     private static readonly SearchValues<char> InvalidPathCharacters = SearchValues.Create("?#\0");
@@ -29,7 +30,8 @@ internal sealed partial class ControllerManagementCore
         Func<CancellationToken, ValueTask<ControllerStateDto?>>? stateProvider = null,
         SemaphoreSlim? mutationGate = null,
         Func<bool>? admissionProbe = null,
-        Func<CancellationToken, ValueTask<ControllerTelemetryDto>>? telemetryProvider = null)
+        Func<CancellationToken, ValueTask<ControllerTelemetryDto>>? telemetryProvider = null,
+        Func<ControllerRuntimeStateFeed?>? runtimeFeedProvider = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _bridge = bridge;
@@ -38,6 +40,7 @@ internal sealed partial class ControllerManagementCore
         _mutationGate = mutationGate;
         _admissionProbe = admissionProbe;
         _telemetryProvider = telemetryProvider;
+        _runtimeFeedProvider = runtimeFeedProvider;
     }
     /// <summary>
     /// Logs a dispatch failure that is being hidden behind a 503 response. Each distinct

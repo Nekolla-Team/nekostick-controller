@@ -11,7 +11,9 @@ export function lifecycleTagType(state: ServiceLifecycleState): StatusTagType {
 }
 
 export function lifecycleLabel(state: ServiceLifecycleState): string {
-  return state === 'waiting' ? t('serviceRuntime.status.waiting') : state
+  if (state === 'waiting') return t('serviceRuntime.status.waiting')
+  if (state === 'stopped') return t('serviceRuntime.status.stopped')
+  return state
 }
 
 export function healthTagType(state: ServiceHealthState): StatusTagType {

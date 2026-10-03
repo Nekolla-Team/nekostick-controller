@@ -5,7 +5,14 @@ export const serviceRuntime = {
   status: {
     lifecycle: 'Lifecycle: {state}',
     waiting: 'Waiting',
+    stopped: 'Stopped',
     health: 'Health: {state}',
+  },
+  failure: {
+    title: 'Failure details',
+    reason: 'Failure reason: {reason}',
+    code: 'Failure code: {code}',
+    stage: 'Failure stage: {stage}',
   },
   actions: {
     restart: 'Restart',
@@ -34,6 +41,7 @@ export const serviceRuntime = {
     startedAt: 'Started at',
     lastUpdatedAt: 'Last updated',
     lastHealthAt: 'Last health check',
+    retryAt: 'Next retry at',
     owner: 'Owner extension',
   },
 } as const

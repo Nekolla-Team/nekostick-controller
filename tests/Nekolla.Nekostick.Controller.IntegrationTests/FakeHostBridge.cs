@@ -51,6 +51,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
         Management = new FakeManagementApi(this);
         Dependencies = new FakeDependencyApi();
         ServiceOutput = new FakeServiceOutputApi();
+        ServiceRuntimeState = new FakeServiceRuntimeStateApi();
     }
     public HostApiVersion ApiVersion => _apiVersion;
     public IExtensionSettingsReader Configuration { get; }
@@ -74,6 +75,10 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
     public IExtensionServiceOutputApi ServiceOutput { get; }
     /// <summary>Gets the programmable fake behind the API 1.4 service-output capability.</summary>
     public FakeServiceOutputApi ServiceOutputFake => (FakeServiceOutputApi)ServiceOutput;
+    /// <summary>Gets the API 1.4 node-local runtime-state subscription capability.</summary>
+    public IExtensionServiceRuntimeStateApi ServiceRuntimeState { get; }
+    /// <summary>Gets the programmable fake behind the runtime-state capability.</summary>
+    public FakeServiceRuntimeStateApi ServiceRuntimeStateFake => (FakeServiceRuntimeStateApi)ServiceRuntimeState;
     /// <summary>Gets the latest host information snapshot returned by the 1.3.3 bridge.</summary>
     public ExtensionHostInfoSnapshot HostInfo
     {
@@ -953,18 +958,64 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
         }
     }
 
-    /// <summary>Programmable API 1.4 service-output capability used by the WebSocket endpoint tests.</summary>
+    /// <summary>Programmable API 1.4 service-output capability used by the WebSocket and SSE endpoint tests.</summary>
     public sealed class FakeServiceOutputApi : IExtensionServiceOutputApi
     {
         private readonly ConcurrentQueue<(Guid ServiceId, ExtensionServiceOutputStream Stream)> _opens = new();
+        private readonly ConcurrentQueue<(Guid ServiceId, long? SinceSequence)> _subscriptions = new();
+        private readonly ConcurrentDictionary<Guid, ExtensionServiceLogCode> _rejections = new();
+        private readonly object _sinkGate = new();
+        private readonly Dictionary<Guid, List<IExtensionServiceLogSink>> _sinks = new();
         private volatile Func<Guid, ExtensionServiceOutputStream, ExtensionServiceOutputStreamResult>? _openHandler;
 
-        /// <summary>Gets every open request observed so far, in order.</summary>
+        /// <summary>Gets every legacy open request observed so far, in order.</summary>
         public IReadOnlyCollection<(Guid ServiceId, ExtensionServiceOutputStream Stream)> Opens => _opens.ToArray();
 
-        /// <summary>Programs the result of subsequent open calls; the default rejects with NotFound.</summary>
+        /// <summary>Gets every log-feed subscription request observed so far, in order.</summary>
+        public IReadOnlyCollection<(Guid ServiceId, long? SinceSequence)> Subscriptions => _subscriptions.ToArray();
+
+        /// <summary>Programs the result of subsequent legacy open calls; the default rejects with NotFound.</summary>
         public void OnOpen(Func<Guid, ExtensionServiceOutputStream, ExtensionServiceOutputStreamResult> handler) =>
             _openHandler = handler;
+
+        /// <summary>Rejects log-feed subscriptions for one service with the supplied Host code.</summary>
+        public void Reject(Guid serviceId, ExtensionServiceLogCode code) => _rejections[serviceId] = code;
+
+        /// <summary>Allows log-feed subscriptions for one service again.</summary>
+        public void ClearRejection(Guid serviceId) => _rejections.TryRemove(serviceId, out _);
+
+        /// <summary>Pushes one log entry to every active subscriber for its service.</summary>
+        public void Push(ExtensionServiceLogEntry entry)
+        {
+            IExtensionServiceLogSink[] sinks;
+            lock (_sinkGate)
+            {
+                sinks = _sinks.TryGetValue(entry.ServiceId, out var registered)
+                    ? registered.ToArray()
+                    : Array.Empty<IExtensionServiceLogSink>();
+            }
+
+            foreach (var sink in sinks)
+            {
+                sink.OnEntry(entry);
+            }
+        }
+
+        /// <summary>Completes all active log-feed subscribers and unregisters their sinks.</summary>
+        public void Complete()
+        {
+            IExtensionServiceLogSink[] sinks;
+            lock (_sinkGate)
+            {
+                sinks = _sinks.Values.SelectMany(static registered => registered).ToArray();
+                _sinks.Clear();
+            }
+
+            foreach (var sink in sinks)
+            {
+                sink.OnCompleted();
+            }
+        }
 
         public ValueTask<ExtensionServiceOutputStreamResult> OpenStreamAsync(
             Guid serviceId,
@@ -978,12 +1029,183 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
                 new ExtensionServiceOutputStreamResult(false, ExtensionServiceOutputCode.NotFound, serviceId, null));
         }
 
-        public ValueTask<ExtensionServiceOutputSubscriptionResult> SubscribeAsync(
+        public ValueTask<ExtensionServiceLogSubscriptionResult> SubscribeAsync(
             Guid serviceId,
-            ExtensionServiceOutputStream stream,
-            IExtensionServiceOutputSink sink,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+            IExtensionServiceLogSink sink,
+            long? sinceSequence = null,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _subscriptions.Enqueue((serviceId, sinceSequence));
+            if (_rejections.TryGetValue(serviceId, out var rejection))
+            {
+                return ValueTask.FromResult(new ExtensionServiceLogSubscriptionResult(false, rejection, serviceId, null));
+            }
+
+            var subscription = new Subscription(this, serviceId, sink);
+            lock (_sinkGate)
+            {
+                if (!_sinks.TryGetValue(serviceId, out var registered))
+                {
+                    registered = [];
+                    _sinks.Add(serviceId, registered);
+                }
+
+                registered.Add(sink);
+            }
+
+            return ValueTask.FromResult(new ExtensionServiceLogSubscriptionResult(
+                true,
+                ExtensionServiceLogCode.Subscribed,
+                serviceId,
+                subscription));
+        }
+
+        private void Unregister(Guid serviceId, IExtensionServiceLogSink sink)
+        {
+            lock (_sinkGate)
+            {
+                if (!_sinks.TryGetValue(serviceId, out var registered))
+                {
+                    return;
+                }
+
+                registered.Remove(sink);
+                if (registered.Count == 0)
+                {
+                    _sinks.Remove(serviceId);
+                }
+            }
+        }
+
+        private sealed class Subscription(FakeServiceOutputApi owner, Guid serviceId, IExtensionServiceLogSink sink)
+            : IExtensionServiceLogSubscription
+        {
+            private int _disposed;
+
+            public void Dispose()
+            {
+                if (Interlocked.Exchange(ref _disposed, 1) == 0)
+                {
+                    owner.Unregister(serviceId, sink);
+                }
+            }
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+        }
+    }
+
+    /// <summary>Programmable API 1.4 runtime-state capability used by the runtime-feed endpoint tests.</summary>
+    public sealed class FakeServiceRuntimeStateApi : IExtensionServiceRuntimeStateApi
+    {
+        private readonly object _gate = new();
+        private readonly List<IExtensionServiceRuntimeStateSink> _sinks = [];
+        private ExtensionServiceRuntimeStateSubscriptionCode? _rejection;
+        private Exception? _subscribeFailure;
+
+        /// <summary>Rejects runtime-state subscriptions with the supplied Host code.</summary>
+        public void Reject(ExtensionServiceRuntimeStateSubscriptionCode code)
+        {
+            lock (_gate)
+            {
+                _subscribeFailure = null;
+                _rejection = code;
+            }
+        }
+
+        /// <summary>Makes subsequent runtime-state subscriptions throw the supplied exception.</summary>
+        public void ThrowOnSubscribe(Exception exception)
+        {
+            ArgumentNullException.ThrowIfNull(exception);
+            lock (_gate)
+            {
+                _rejection = null;
+                _subscribeFailure = exception;
+            }
+        }
+
+        /// <summary>Pushes one runtime-state change to every active subscriber.</summary>
+        public void Push(ExtensionServiceRuntimeStateChange change)
+        {
+            IExtensionServiceRuntimeStateSink[] sinks;
+            lock (_gate)
+            {
+                sinks = _sinks.ToArray();
+            }
+
+            foreach (var sink in sinks)
+            {
+                sink.OnStateChanged(change);
+            }
+        }
+
+        /// <summary>Completes the fake subscription set and unregisters all sinks.</summary>
+        public void Complete()
+        {
+            lock (_gate)
+            {
+                _sinks.Clear();
+            }
+        }
+
+        public ValueTask<ExtensionServiceRuntimeStateSubscriptionResult> SubscribeStatesAsync(
+            IExtensionServiceRuntimeStateSink sink,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (_gate)
+            {
+                if (_subscribeFailure is { } failure)
+                {
+                    throw failure;
+                }
+
+                if (_rejection is { } rejection)
+                {
+                    return ValueTask.FromResult(new ExtensionServiceRuntimeStateSubscriptionResult(false, rejection, null));
+                }
+
+                _sinks.Add(sink);
+            }
+
+            var subscription = new Subscription(this, sink);
+            return ValueTask.FromResult(new ExtensionServiceRuntimeStateSubscriptionResult(
+                true,
+                ExtensionServiceRuntimeStateSubscriptionCode.Subscribed,
+                subscription));
+        }
+
+        private void Unregister(IExtensionServiceRuntimeStateSink sink)
+        {
+            lock (_gate)
+            {
+                _sinks.Remove(sink);
+            }
+        }
+
+        private sealed class Subscription(FakeServiceRuntimeStateApi owner, IExtensionServiceRuntimeStateSink sink)
+            : IExtensionServiceRuntimeStateSubscription
+        {
+            private int _disposed;
+
+            public void Dispose()
+            {
+                if (Interlocked.Exchange(ref _disposed, 1) == 0)
+                {
+                    owner.Unregister(sink);
+                }
+            }
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+        }
     }
 }
 

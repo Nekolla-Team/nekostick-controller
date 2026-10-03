@@ -143,8 +143,17 @@ internal sealed class ControllerRuntime
         var hostInfo = _bridge is IExtensionHostBridge13 bridge13 && ExtensionHostApiSupport.IsApi133Supported(bridge13.ApiVersion)
             ? ReadHostInfo(bridge13)
             : null;
+        if (hostInfo is not null && ExtensionHostApiSupport.SnapshotCommittedByAvailable)
+        {
+            hostInfo.CommittedBy = ReadSnapshotCommittedBy(snapshot);
+        }
         return BuildState(options, hostRouteRunning, hostInfo);
     }
+
+    /// <summary>Reads the configuration write attribution. NoInlining: the member postdates the API 1.4.0 contract baseline.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static string? ReadSnapshotCommittedBy(HostConfigurationSnapshot snapshot) => snapshot.CommittedBy;
+
     /// <summary>Logs a state snapshot read failure once; the polling state endpoint must not flood the host log.</summary>
     private void LogStateReadFailure(string message)
     {

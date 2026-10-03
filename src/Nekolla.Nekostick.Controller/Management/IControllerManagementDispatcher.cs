@@ -38,6 +38,33 @@ public interface IControllerManagementDispatcher
         Guid serviceId,
         ExtensionServiceOutputStream stream,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Admits the request, then opens one consumer view over the node-local service runtime-state
+    /// feed. The returned view is caller-owned; disposing it detaches the subscription. The operation
+    /// never blocks on state: it returns as soon as admission passes.
+    /// </summary>
+    /// <param name="request">The admitted transport-neutral request metadata used for admission.</param>
+    /// <param name="cancellationToken">Cancels the subscribe operation.</param>
+    ControllerRuntimeFeedResult DispatchServiceRuntimeFeed(
+        ControllerManagementRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Admits the request, then opens one cross-generation service-log feed subscription. The
+    /// returned feed is caller-owned; disposing it detaches the Host subscription. A rejection
+    /// carrying the unsupported dispatch code means the host lacks the log API and the caller
+    /// should fall back to the single-generation output stream.
+    /// </summary>
+    /// <param name="request">The admitted transport-neutral request metadata used for admission.</param>
+    /// <param name="serviceId">The configured service whose log feed is requested.</param>
+    /// <param name="sinceSequence">Resume cursor: entries after this sequence only; null for live-plus-history.</param>
+    /// <param name="cancellationToken">Cancels the subscribe operation.</param>
+    ValueTask<ControllerServiceLogFeedResult> DispatchServiceLogFeedAsync(
+        ControllerManagementRequest request,
+        Guid serviceId,
+        long? sinceSequence,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>Exposes the atomically active immutable options to transport request handlers.</summary>

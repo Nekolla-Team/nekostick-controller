@@ -20,6 +20,7 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
     public async Task OutputStream_DeliversBinaryFramesAndClosesNormallyOnProcessExit()
     {
         var serviceId = Guid.CreateVersion7();
+        fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         var payload = Encoding.UTF8.GetBytes("hello\nworld\n");
         fixture.Host.ServiceOutputFake.OnOpen((id, stream) =>
             new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(payload)));
@@ -38,6 +39,7 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
     public async Task OutputStream_StderrQuerySelectsStderr()
     {
         var serviceId = Guid.CreateVersion7();
+        fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         fixture.Host.ServiceOutputFake.OnOpen((id, stream) =>
             new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(Array.Empty<byte>())));
 
@@ -52,6 +54,7 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
     public async Task OutputStream_AuthenticatesViaKeySubProtocol()
     {
         var serviceId = Guid.CreateVersion7();
+        fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         var payload = Encoding.UTF8.GetBytes("via-subprotocol\n");
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
             new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(payload)));
@@ -70,6 +73,7 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
     public async Task OutputStream_HeaderKeyWinsOverSubProtocol()
     {
         var serviceId = Guid.CreateVersion7();
+        fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         var payload = Encoding.UTF8.GetBytes("header-wins\n");
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
             new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(payload)));
@@ -144,6 +148,7 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
     public async Task OutputStream_UnknownServiceReturnsNotFound()
     {
         var serviceId = Guid.CreateVersion7();
+        fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
             new ExtensionServiceOutputStreamResult(false, ExtensionServiceOutputCode.NotFound, id, null));
 
@@ -158,6 +163,7 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
     public async Task OutputStream_NotRunningReturnsConflict()
     {
         var serviceId = Guid.CreateVersion7();
+        fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
             new ExtensionServiceOutputStreamResult(false, ExtensionServiceOutputCode.NotRunning, id, null));
 
@@ -174,6 +180,7 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
     public async Task OutputStream_ClientCloseDisposesHostStream()
     {
         var serviceId = Guid.CreateVersion7();
+        fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         var output = new BlockingOutputStream();
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
             new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, output));
@@ -249,6 +256,7 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var serviceId = Guid.CreateVersion7();
+        fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         var payload = Encoding.UTF8.GetBytes("hello\nworld\n");
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
             new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(payload)));
@@ -278,6 +286,7 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
     public async Task HostRoute_OutputStream_SseStderrQuerySelectsStderr()
     {
         var serviceId = Guid.CreateVersion7();
+        fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
             new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(Array.Empty<byte>())));
 
@@ -304,6 +313,7 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
     public async Task HostRoute_OutputStream_UnknownServiceReturnsNotFound()
     {
         var serviceId = Guid.CreateVersion7();
+        fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
             new ExtensionServiceOutputStreamResult(false, ExtensionServiceOutputCode.NotFound, id, null));
 
@@ -316,6 +326,7 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
     public async Task HostRoute_OutputStream_NotRunningReturnsConflict()
     {
         var serviceId = Guid.CreateVersion7();
+        fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
             new ExtensionServiceOutputStreamResult(false, ExtensionServiceOutputCode.NotRunning, id, null));
 
@@ -389,6 +400,7 @@ public sealed class ServiceOutputStreamSessionTests(ControllerApi14Fixture fixtu
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var serviceId = Guid.CreateVersion7();
+        fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         var output = new BlockingOutputStream();
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
             new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, output));

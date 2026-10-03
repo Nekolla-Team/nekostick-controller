@@ -22,6 +22,7 @@
 | `GET`, `PATCH`, `DELETE` | `/v1/services/{id}` | 读取、更新或删除 service |
 | `GET` | `/v1/services/runtime` | 读取所有服务的 runtime telemetry |
 | `GET` | `/v1/services/{id}/runtime` | 读取单个服务的 runtime telemetry |
+| `GET` | `/v1/services/runtime/stream` | 订阅全量 runtime 状态推送流（SSE，快照重放 + 增量，Host 支持 Contracts 1.4 preview 推送能力时可用，见 2.7） |
 | `POST` | `/v1/services/{id}/runtime/resume` | 在本节点恢复处于 waiting 的 service（Host API >=1.3.3） |
 | `POST` | `/v1/services/{id}/runtime/restart` | 在本节点严格重启 service（Host API >=1.3.3） |
 | `GET` | `/v1/services/{id}/output/stream` | 订阅单个服务的实时 stdout/stderr 输出流（HTTP/Unix 走 WebSocket，HostRoute 走 SSE，Host API >=1.4.0，见 2.6） |
@@ -119,25 +120,38 @@ Web UI 由 controller extension settings 中的 `enableWebUi` 控制。该设置
 - **HostRoute**：SSE（`text/event-stream`）。HostRoute 的扩展 handler ABI 无法表达 WebSocket upgrade，因此该传输上这条路径一律以 SSE 应答；controller 通过 streaming route handler（`IExtensionStreamingHandler`，Host API >=1.3.2）把流式响应交给 Host 逐段拷贝给客户端。输出能力本身需要 Host API >=1.4.0；不满足时按下面的错误约定应答。
 - **gRPC**：无法承载该路径，按普通未知资源处理（`404 not_found`）。
 
-公共约定：query `?stream=stdout`（缺省默认值）或 `?stream=stderr`，其他值返回 `400 invalid_request`。流绑定当前进程代次，只推送订阅之后产生的新输出，不回放历史。Host 侧缓冲有界，生产速度超过消费速度时可能静默丢弃字节，因此它适合实时观察，不能当作可靠的日志传输通道。客户端断开连接即取消订阅，Host 订阅随连接释放。打开流之前的错误：Host API 低于 `1.4.0` 或能力缺失返回 `501 unsupported`；未知 service 返回 `404 not_found`；service 没有可订阅的运行中输出泵返回 `409 not_running`；Host bridge 不可用返回 `503 unavailable`，这些都是普通 envelope。
+公共约定：query `?stream=stdout`（缺省默认值）或 `?stream=stderr`，其他值返回 `400 invalid_request`。当 Host 支持 Contracts 1.4 preview 的服务日志 feed（`IExtensionServiceOutputApi.SubscribeAsync`）时，该端点走**跨进程代次日志 feed**：输出跨越进程重启连续推送，支持 `?since=<sequence>` 断点续传（只推送该序号之后的条目；光标非法或已被淘汰返回 `400 invalid_request`），service 未运行时不再报 `409` 而是推送当前状态条目并等待后续代次。Host 不支持日志 feed 时回退到旧的单代次输出泵：流绑定当前进程代次，只推送订阅之后产生的新输出，不回放历史，也没有 `since` 与状态帧。Host 侧缓冲有界，生产速度超过消费速度时可能丢弃字节（日志 feed 路径下以 `gap` 状态条目显式标出缺失区间），因此它适合实时观察，不能当作可靠的日志传输通道。客户端断开连接即取消订阅，Host 订阅随连接释放。打开流之前的错误：Host API 低于 `1.4.0` 或能力缺失返回 `501 unsupported`；未知 service 返回 `404 not_found`；回退路径下 service 没有可订阅的运行中输出泵返回 `409 not_running`；Host bridge 不可用返回 `503 unavailable`，这些都是普通 envelope。
 
 **WebSocket 承载（HTTP/JSON、Unix socket）**：
 
 - 握手：标准 WebSocket upgrade request，认证使用同一个 `x-nekostick-controller-key` header；认证或 dispatcher 级 admission 失败在 upgrade 之前以普通 envelope 响应（`401 unauthorized` 等）。无法设置 upgrade header 的浏览器客户端可以改为提供一个 `Sec-WebSocket-Protocol` token：`nekostick.controller.key.<base64url(API key)>`；header 存在时优先于该 token，服务器不会回声任何子协议。
 - 请求形状检查先于认证执行：非 upgrade 的普通 GET、`stream` 取值非法或 header 超限时直接返回 transport-level 的空 body `400`（没有 envelope，与第 4 节末尾的 admission 约定一致）；因此同时缺 key 且形状非法的请求得到 `400` 而非 `401`。
-- 数据帧：每条二进制 message 承载一次读取的原始字节，不做行缓冲也不做文本转码；客户端不应假设帧边界对齐行边界或单次写调用。
-- 关闭码：`1000` 表示进程代次结束（输出流 EOF）；`1001` 表示管理会话结束（API key 轮换）或传输正在停止；`1011` 表示 Host 输出流故障。
+- 数据帧（日志 feed 路径）：二进制 message 承载 `output` 条目的原始字节，不做行缓冲；其余条目（`generationStarted`、`processExited`、`startupFailed`、`currentState`、`gap`、`termination`）以 JSON 文本帧推送，形状见 6.5.2 的 `ServiceLogEntry`。客户端不应假设二进制帧边界对齐行边界或单次写调用。
+- 数据帧（旧输出泵路径）：只有二进制 message，语义同上，没有文本状态帧。
+- 关闭码：`1000` 表示 feed 正常结束（日志 feed 路径为收到 `termination` 条目或 Host 完成订阅，旧路径为进程代次结束 EOF）；`1001` 表示管理会话结束（API key 轮换）或传输正在停止；`1011` 表示 Host 输出流故障。
 - dispatcher 内部异常返回空 body 的 `503`。
 
 **SSE 承载（HostRoute）**：
 
 - 认证：`x-nekostick-controller-key` header，与 buffered API 一致。浏览器客户端应使用 `fetch` 流式读取而不是 `EventSource`（后者无法设置请求头）。
-- 数据帧：每条 `data:<base64>\n\n` 承载一次读取的原始字节（base64 带 padding，按 SSE 规范分帧），帧边界同样不对齐行边界。
+- 数据帧（日志 feed 路径）：`output` 条目为 `data:<base64>\n\n`（base64 带 padding，按 SSE 规范分帧，帧边界不对齐行边界）；带 `sequence` 的条目同时携带 `id:<sequence>`，浏览器 `EventSource` 语义下自动成为 `Last-Event-ID`。其余条目为 `event:state\ndata:<json>\n\n`，JSON 形状见 6.5.2 的 `ServiceLogEntry`。
+- 数据帧（旧输出泵路径）：只有 `data:<base64>\n\n`，没有 `id` 与状态帧。
 - 心跳：空闲每 15 秒发送一条 `: heartbeat\n\n` 注释帧，保活并阻止中间层空闲断连。
-- 结束帧：流终止前发送 `event:end\ndata:{"reason":"..."}\n\n`，`reason` 为 `processExited`（进程代次结束）、`sessionEnded`（管理会话结束）或 `fault`（Host 输出流故障）；客户端主动断开时不发送。连接在没有结束帧的情况下断开应按异常处理。
+- 断点续传（仅日志 feed 路径）：`?since=<sequence>` 显式指定恢复点；缺省时读取请求的 `Last-Event-ID` header（非法值按缺省处理）；两者都没有则按 Host 默认语义订阅（通常含当前状态与近期缓冲）。
+- 结束帧：流终止前发送 `event:end\ndata:{"reason":"..."}\n\n`。日志 feed 路径的 `reason` 为 `extensionUnloaded`、`serviceDisabled`、`serviceRemoved`、`hostShutdown`（均来自 Host 的 `termination` 条目）或 `sessionEnded`（Host 完成订阅或管理会话结束）；旧输出泵路径为 `processExited`（进程代次结束）、`sessionEnded` 或 `fault`（Host 输出流故障）。客户端主动断开时不发送；连接在没有结束帧的情况下断开应按异常处理。
 - 响应头：`Content-Type: text/event-stream`、`Cache-Control: no-store`。
 
 内嵌 Web UI 的服务运行状态页提供「输出」入口：查看器优先尝试 WebSocket，upgrade 在打开前失败（例如页面经 HostRoute 承载）时自动回退到 SSE，两种承载下 stdout/stderr 切换与认证行为一致。
+
+### 2.7 Service runtime 推送流（SSE）
+
+`GET /v1/services/runtime/stream` 把全量 service runtime 状态以 SSE 持续推送给客户端，替代定时轮询 `GET /v1/services/runtime`。它在 HTTP/JSON、Unix socket 与 HostRoute 上都以 `text/event-stream` 应答（gRPC 不支持）；认证与 buffered API 一致（`x-nekostick-controller-key` header）。
+
+- 行为：订阅建立后先重放当前全量快照（每个 service 一条 `isInitialSnapshot: true` 的 `snapshot` 条目），随后持续推送增量（`snapshot` 为 upsert，`removed` 为删除）。重连即重新订阅并重新获得完整重放，因此**没有续传光标**，客户端以新订阅的首批 `isInitialSnapshot` 条目重置本地视图。
+- 帧：每条 `id:<sequence>\nevent:state\ndata:<json>\n\n`，JSON 形状见 6.5.3；空闲每 15 秒一条 `: heartbeat` 注释帧。
+- 结束帧：会话结束时发送 `event:end\ndata:{"reason":"sessionEnded"|"fault"}\n\n`。
+- 错误：Host 不支持 runtime 推送能力（Contracts 低于 1.4 preview 推送面）返回 `501 unsupported`，客户端应回退到轮询；其余错误与 buffered API 一致（`401`、`503` 等）。
+- 响应头：`Content-Type: text/event-stream`、`Cache-Control: no-store`。慢消费者缓冲有界（256 条），溢出后服务端主动结束该订阅，客户端重连即可获得完整重放。
 
 ## 3. 认证与请求边界
 
@@ -420,13 +434,21 @@ DELETE 清空 environment。environment value 可能包含 secret，应按敏感
 | `processId` | 已知时为本机 process ID，否则 `null` |
 | `startedAt` | 当前进程代次的 UTC 启动时间，未知为 `null` |
 | `uptimeMs` | 当前进程代次的运行毫秒数，未知为 `null` |
-| `lifecycleState` | `Unknown`、`Disabled`、`Starting`、`Running`、`Stopping`、`Failed`、`waiting` |
+| `lifecycleState` | `Unknown`、`Disabled`、`Starting`、`Running`、`Stopping`、`Failed`、`waiting`、`Stopped`（`Stopped` 仅 Host 支持 Contracts 1.4 preview 增强运行时状态时可能出现） |
 | `healthState` | `Unknown`、`Healthy`、`Unhealthy` |
 | `forwardedRequestCount` | 累计转发请求数 |
 | `activeForwardedRequestCount` | 当前转发中的请求数 |
 | `lastUpdatedAt` | telemetry 最后更新时间，未知为 `null` |
 | `lastHealthAt` | 最近健康检查时间，未知为 `null` |
 | `ownerExtensionId` | 归属扩展 id；Host 直接管理时为 `null` |
+| `failureStage` | 失败阶段（`Spawn`、`HealthProbe`、`ProcessExit`）；无失败详情或 Host 不支持增强运行时状态时为 `null` |
+| `failureCode` | 机器可读失败码；同上为 `null` |
+| `failureReason` | 人类可读失败原因；同上为 `null` |
+| `processExitCode` | 当前/最近进程代次的退出码；未知为 `null` |
+| `restartCount` | 自动重启次数；Host 不支持时为 `null` |
+| `stateEnteredAt` | 进入当前 lifecycle state 的 UTC 时间；未知为 `null` |
+| `retryAt` | 下次自动重试的 UTC 时间；无计划重试为 `null` |
+| `lastProbe` | 最近一次健康探针快照（`observedAt`、`result`、`target`、`failureCode`、`errorMessage`）；Host 不支持时整体为 `null` |
 
 控制器不会伪造 Host 没有的 telemetry。member 不存在时返回 `404 not_found`；能力不支持返回 `501 unsupported`；存储或 runtime 数据不可用返回 `503 storage_unavailable`。
 
@@ -435,6 +457,59 @@ DELETE 清空 environment。environment value 可能包含 secret，应按敏感
 `POST /v1/services/{id}/runtime/resume` 用于在本节点主动恢复处于 `waiting` 的 service；`POST /v1/services/{id}/runtime/restart` 用于在本节点执行严格的停后启动。两者都要求请求 body 为空，不接受 `If-Match`，成功 envelope 的 `version` 固定为 `null`，响应不带 ETag。它们不会写入或同步全局配置。
 
 resume 成功时 `data.outcome` 为 `resumed`；service 已经不在 waiting 状态而请求被忽略时为 `ignored`。restart 成功时始终为 `restarted`，不会返回 `ignored`。Host API 低于 `1.3.3` 时返回 `501 unsupported`；未知 service 返回 `404 not_found`；service 状态验证失败返回 `400 invalid_request`；其他 Host 错误按统一错误映射返回。
+
+#### 6.5.2 输出流状态条目（ServiceLogEntry）
+
+日志 feed 路径下（见 2.6），非输出条目以 SSE `event:state` 帧或 WebSocket JSON 文本帧推送：
+
+```json
+{
+  "kind": "processExited",
+  "sequence": 1042,
+  "timestamp": "2026-08-24T01:25:00.0000000+00:00",
+  "stream": null,
+  "data": null,
+  "processInstanceId": "01234567-89ab-7cde-8f01-23456789abcd",
+  "attemptNumber": 2,
+  "processExitCode": 137,
+  "lifecycleState": "Failed",
+  "failureStage": "ProcessExit",
+  "failureCode": "ProcessExitedWithError",
+  "failureReason": "Process exited with code 137.",
+  "firstMissingSequence": null,
+  "lastMissingSequence": null,
+  "terminationReason": null
+}
+```
+
+| 字段 | 语义 |
+| --- | --- |
+| `kind` | `output`、`generationStarted`、`processExited`、`startupFailed`、`currentState`、`gap`、`termination` |
+| `sequence` | Host 分配的单调序号，即 `since` 续传光标；条目不带序号时为 `null` |
+| `timestamp` | Host 记录该条目的 UTC 时间 |
+| `stream` / `data` | 仅 `output` 条目携带：`stdout`/`stderr` 与 base64 字节 |
+| `processInstanceId` / `attemptNumber` | 条目所属进程代次及其 1 起尝试序号，未知为 `null` |
+| `processExitCode` | 已结束代次的退出码 |
+| `lifecycleState` / `failureStage` / `failureCode` / `failureReason` | 状态条目携带的生命周期状态与失败详情 |
+| `firstMissingSequence` / `lastMissingSequence` | `gap` 条目标出的被丢弃序号区间 |
+| `terminationReason` | 仅 `termination` 条目：`extensionUnloaded`、`serviceDisabled`、`serviceRemoved`、`hostShutdown` |
+
+#### 6.5.3 Runtime 推送条目
+
+`GET /v1/services/runtime/stream`（见 2.7）的 `event:state` 帧载荷：
+
+```json
+{
+  "sequence": 87,
+  "kind": "snapshot",
+  "serviceId": "01234567-89ab-7cde-8f01-23456789abcd",
+  "isInitialSnapshot": false,
+  "ownerExtensionId": null,
+  "snapshot": { "serviceId": "01234567-89ab-7cde-8f01-23456789abcd", "lifecycleState": "Running" }
+}
+```
+
+`snapshot` 字段即 6.5 的完整 runtime telemetry 对象（`removed` 条目为 `null`）；`sequence` 由 Host 单调分配，仅用于排序与诊断，客户端重连不携带光标。
 
 ### 6.6 Extensions
 
@@ -602,7 +677,8 @@ curl --fail-with-body \
       "publishedConfigurationVersion": 42,
       "lastSnapshotState": "accepted",
       "lastSnapshotStateAt": "2026-08-24T01:25:00.0000000+00:00",
-      "readiness": "ready"
+      "readiness": "ready",
+      "committedBy": "host-config-api"
     }
   },
   "version": null
@@ -624,6 +700,7 @@ curl --fail-with-body \
 | `lastSnapshotState` | 最近快照结果：`unknown`、`accepted` 或 `rejected` |
 | `lastSnapshotStateAt` | 最近快照状态变更时间，未知时为 `null` |
 | `readiness` | Host readiness：`unknown`、`unready`、`ready`、`degraded` 或 `publishing` |
+| `committedBy` | 最近一次配置快照的提交者标识（Host 写入归因）；Host 不支持写入归因（Contracts 低于 1.4 preview）时为 `null` |
 
 
 `GET /v1/controller/telemetry` 返回 controller 进程与主机的时点遥测快照。它是只读、未版本化的状态读取：请求 body 必须为空，不接受 `If-Match`，成功响应不带 ETag 且 envelope `version` 固定为 `null`。接口供调用方自行轮询采样（例如每 1–2 秒）：CPU 占用率由相邻两次采样的 tick 差分计算，因此每次连接后的首个样本中 `cpuPercent` 字段为 `null`。

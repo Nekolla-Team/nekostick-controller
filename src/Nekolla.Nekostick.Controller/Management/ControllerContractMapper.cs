@@ -52,20 +52,51 @@ internal static class ControllerContractMapper
         StartMode = (ControllerServiceStartMode)source.StartMode, RestartPolicy = (ControllerServiceRestartPolicy)source.RestartPolicy, HealthCheck = ToRead(source.HealthCheck),
         CreatedAt = source.CreatedAt, UpdatedAt = source.UpdatedAt, Version = source.Version
     };
-    internal static ControllerServiceRuntimeReadDto ToRead(ExtensionServiceRuntimeSnapshot source) => new()
+    internal static ControllerServiceRuntimeReadDto ToRead(ExtensionServiceRuntimeSnapshot source)
     {
-        ServiceId = source.ServiceId,
-        ProcessId = source.ProcessId,
-        StartedAt = source.StartedAt,
-        UptimeMs = source.Uptime?.Ticks / TimeSpan.TicksPerMillisecond,
-        LifecycleState = (ControllerServiceLifecycleState)source.LifecycleState,
-        HealthState = (ControllerServiceHealthState)source.HealthState,
-        ForwardedRequestCount = source.ForwardedRequestCount,
-        ActiveForwardedRequestCount = source.ActiveForwardedRequestCount,
-        LastUpdatedAt = source.LastUpdatedAt,
-        LastHealthAt = source.LastHealthAt,
-        OwnerExtensionId = source.OwnerExtensionId
-    };
+        var target = new ControllerServiceRuntimeReadDto
+        {
+            ServiceId = source.ServiceId,
+            ProcessId = source.ProcessId,
+            StartedAt = source.StartedAt,
+            UptimeMs = source.Uptime?.Ticks / TimeSpan.TicksPerMillisecond,
+            LifecycleState = (ControllerServiceLifecycleState)source.LifecycleState,
+            HealthState = (ControllerServiceHealthState)source.HealthState,
+            ForwardedRequestCount = source.ForwardedRequestCount,
+            ActiveForwardedRequestCount = source.ActiveForwardedRequestCount,
+            LastUpdatedAt = source.LastUpdatedAt,
+            LastHealthAt = source.LastHealthAt,
+            OwnerExtensionId = source.OwnerExtensionId
+        };
+        if (ExtensionHostApiSupport.RuntimeStateDetailsAvailable)
+        {
+            MapRuntimeStateDetails(source, target);
+        }
+        return target;
+    }
+
+    /// <summary>Fills the enriched runtime detail members. NoInlining: these members postdate the API 1.4.0 contract baseline.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void MapRuntimeStateDetails(ExtensionServiceRuntimeSnapshot source, ControllerServiceRuntimeReadDto target)
+    {
+        target.FailureStage = source.FailureStage == ExtensionServiceFailureStage.None ? null : source.FailureStage.ToString();
+        target.FailureCode = source.FailureCode == ExtensionServiceFailureCode.None ? null : source.FailureCode.ToString();
+        target.FailureReason = source.FailureReason;
+        target.ProcessExitCode = source.ProcessExitCode;
+        target.RestartCount = source.RestartCount;
+        target.StateEnteredAt = source.StateEnteredAt;
+        target.RetryAt = source.RetryAt;
+        target.LastProbe = source.LastProbe is { } probe
+            ? new ControllerServiceProbeReadDto
+            {
+                ObservedAt = probe.ObservedAt,
+                Result = probe.Result.ToString(),
+                Target = probe.Target,
+                FailureCode = probe.FailureCode == ExtensionServiceFailureCode.None ? null : probe.FailureCode.ToString(),
+                ErrorMessage = probe.ErrorMessage
+            }
+            : null;
+    }
 
     internal static ControllerExtensionRecordReadDto ToRead(ExtensionManagementEntry source) => new()
     {

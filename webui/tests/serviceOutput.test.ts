@@ -89,26 +89,53 @@ describe('service output event stream', () => {
     );
   });
 
-  it('decodes padded base64 data frames', () => {
-    expect(decodeServiceOutputChunk(btoa('hello\n'))).toEqual(new TextEncoder().encode('hello\n'));
+  it('includes a sequence cursor in the SSE URL', () => {
+    expect(
+      new URL(buildServiceOutputEventStreamUrl('id', 'stderr', 17)!).searchParams.get('since'),
+    ).toBe('17');
   });
 
   it('parses documented end reasons and rejects unknown payloads', () => {
     expect(parseServiceOutputEndReason('{"reason":"processExited"}')).toBe('processExited');
     expect(parseServiceOutputEndReason('{"reason":"sessionEnded"}')).toBe('sessionEnded');
+    expect(parseServiceOutputEndReason('{"reason":"extensionUnloaded"}')).toBe('extensionUnloaded');
+    expect(parseServiceOutputEndReason('{"reason":"serviceDisabled"}')).toBe('serviceDisabled');
+    expect(parseServiceOutputEndReason('{"reason":"serviceRemoved"}')).toBe('serviceRemoved');
+    expect(parseServiceOutputEndReason('{"reason":"hostShutdown"}')).toBe('hostShutdown');
     expect(parseServiceOutputEndReason('{"reason":"mystery"}')).toBe('fault');
     expect(parseServiceOutputEndReason('not json')).toBe('fault');
   });
 
-  it('streams chunks and the terminal end event', async () => {
-    const frames = `data:${btoa('one\n')}\n\ndata:${btoa('two\n')}\n\nevent:end\ndata:{"reason":"processExited"}\n\n`;
+  it('streams output and state frames with their sequence IDs, then the terminal end event', async () => {
+    const gapEntry = {
+      kind: 'gap',
+      sequence: 2,
+      timestamp: '2026-10-03T00:00:00Z',
+      firstMissingSequence: 2,
+      lastMissingSequence: 3,
+    };
+    const frames = [
+      `id:1\ndata:${btoa('one\n')}\n\n`,
+      `id:2\nevent:state\ndata:${JSON.stringify(gapEntry)}\n\n`,
+      `id:3\ndata:${btoa('two\n')}\n\n`,
+      'event:end\ndata:{"reason":"processExited"}\n\n',
+    ].join('');
     vi.stubGlobal('fetch', vi.fn(async () => sseResponse(frames)));
 
     const chunks: string[] = [];
+    const entries: unknown[] = [];
+    const sequences: Array<number | undefined> = [];
     let endReason: ServiceOutputEndReason | null = null;
     const handle = openServiceOutputEventStream('http://x/stream', 'key', {
       onOpen: () => undefined,
-      onChunk: (bytes) => chunks.push(new TextDecoder().decode(bytes)),
+      onChunk: (bytes, sequence) => {
+        chunks.push(new TextDecoder().decode(bytes));
+        sequences.push(sequence);
+      },
+      onState: (entry, sequence) => {
+        entries.push(entry);
+        sequences.push(sequence);
+      },
       onEnd: (reason) => {
         endReason = reason;
       },
@@ -117,9 +144,16 @@ describe('service output event stream', () => {
     await handle.done;
 
     expect(chunks).toEqual(['one\n', 'two\n']);
+    expect(entries).toEqual([gapEntry]);
+    expect(sequences).toEqual([1, 2, 3]);
     expect(endReason).toBe('processExited');
     vi.unstubAllGlobals();
   });
+
+  it('decodes padded base64 data frames', () => {
+    expect(decodeServiceOutputChunk(btoa('hello\n'))).toEqual(new TextEncoder().encode('hello\n'));
+  });
+
 
   it('reports non-200 responses as http failures with the status', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 409 })));
@@ -128,6 +162,7 @@ describe('service output event stream', () => {
     const handle = openServiceOutputEventStream('http://x/stream', 'key', {
       onOpen: () => undefined,
       onChunk: () => undefined,
+      onState: () => undefined,
       onEnd: () => undefined,
       onFailure: (reason) => {
         failure = reason;
@@ -146,6 +181,7 @@ describe('service output event stream', () => {
     const handle = openServiceOutputEventStream('http://x/stream', 'key', {
       onOpen: () => undefined,
       onChunk: () => undefined,
+      onState: () => undefined,
       onEnd: () => undefined,
       onFailure: (reason) => {
         failure = reason;
@@ -173,6 +209,7 @@ describe('service output event stream', () => {
     const handle = openServiceOutputEventStream('http://x/stream', 'key', {
       onOpen: () => undefined,
       onChunk: () => undefined,
+      onState: () => undefined,
       onEnd: () => undefined,
       onFailure: (reason) => {
         failure = reason;

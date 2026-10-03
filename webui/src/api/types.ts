@@ -34,6 +34,7 @@ export type ServiceLifecycleState =
   | 'Running'
   | 'Stopping'
   | 'Failed'
+  | 'stopped'
   | 'waiting';
 export type ServiceHealthState = 'Unknown' | 'Healthy' | 'Unhealthy';
 
@@ -277,6 +278,14 @@ export interface ServiceEnvironmentWriteBody {
   environment: Record<string, string>;
 }
 
+export interface ServiceRuntimeProbe {
+  observedAt: string;
+  result: 'Healthy' | 'Unhealthy' | 'TimedOut' | 'Unavailable' | 'Cancelled' | 'Unknown';
+  target?: string | null;
+  failureCode?: string | null;
+  errorMessage?: string | null;
+}
+
 export interface ServiceRuntimeSnapshot {
   serviceId: string;
   processId: number | null;
@@ -289,6 +298,53 @@ export interface ServiceRuntimeSnapshot {
   lastUpdatedAt: string | null;
   lastHealthAt: string | null;
   ownerExtensionId: string | null;
+  failureStage?: 'Spawn' | 'HealthProbe' | 'ProcessExit' | null;
+  failureCode?: string | null;
+  failureReason?: string | null;
+  processExitCode?: number | null;
+  restartCount?: number | null;
+  stateEnteredAt?: string | null;
+  retryAt?: string | null;
+  lastProbe?: ServiceRuntimeProbe | null;
+}
+
+export interface ServiceLogEntry {
+  kind:
+    | 'output'
+    | 'generationStarted'
+    | 'processExited'
+    | 'startupFailed'
+    | 'currentState'
+    | 'gap'
+    | 'termination';
+  sequence?: number | null;
+  timestamp: string;
+  stream?: 'stdout' | 'stderr' | null;
+  data?: string | null;
+  processInstanceId?: string | null;
+  attemptNumber?: number | null;
+  processExitCode?: number | null;
+  lifecycleState?: ServiceLifecycleState | null;
+  failureStage?: 'Spawn' | 'HealthProbe' | 'ProcessExit' | null;
+  failureCode?: string | null;
+  failureReason?: string | null;
+  firstMissingSequence?: number | null;
+  lastMissingSequence?: number | null;
+  terminationReason?:
+    | 'extensionUnloaded'
+    | 'serviceDisabled'
+    | 'serviceRemoved'
+    | 'hostShutdown'
+    | null;
+}
+
+export interface ServiceRuntimeFeedEntry {
+  sequence: number;
+  kind: 'snapshot' | 'removed';
+  serviceId: string;
+  isInitialSnapshot: boolean;
+  ownerExtensionId: string | null;
+  snapshot: ServiceRuntimeSnapshot | null;
 }
 
 export type ServiceRuntimeDto = ServiceRuntimeSnapshot;

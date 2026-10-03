@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import {
+  NAlert,
   NButton,
   NCard,
   NDescriptions,
@@ -20,6 +21,7 @@ import {
   restartServiceRuntime,
   resumeServiceRuntime,
 } from '../api/resources/services'
+import { useServiceRuntimeFeed } from '../composables/useServiceRuntimeFeed'
 import { ApiClientError } from '../api/client'
 import { healthTagType, lifecycleLabel, lifecycleTagType } from '../serviceStatus'
 import { useRoute } from 'vue-router'
@@ -29,11 +31,12 @@ const route = useRoute()
 const queryClient = useQueryClient()
 const message = useMessage()
 const serviceId = computed(() => String(route.params.id ?? ''))
+const runtimeFeed = useServiceRuntimeFeed()
 const runtimeListQuery = useQuery({
   queryKey: ['services', 'runtime'],
   queryFn: getAllRuntime,
   retry: false,
-  refetchInterval: 3000,
+  refetchInterval: computed(() => runtimeFeed.pollingEnabled.value ? 3000 : false),
   refetchIntervalInBackground: false,
 })
 // A service only has a runtime snapshot while the supervisor tracks an active generation;
@@ -47,13 +50,14 @@ const runtimeQuery = useQuery({
   queryKey: computed(() => ['services', serviceId.value, 'runtime']),
   queryFn: () => getRuntime(serviceId.value),
   enabled: computed(() => serviceId.value.length > 0 && runtimeListed.value !== false),
-  refetchInterval: 3000,
+  refetchInterval: computed(() => runtimeFeed.pollingEnabled.value ? 3000 : false),
   refetchIntervalInBackground: false,
 })
 const snapshot = computed(() => runtimeQuery.data.value)
 const runtimeNotFound = computed(() =>
   runtimeQuery.error.value instanceof ApiClientError && runtimeQuery.error.value.status === 404)
-const runtimeUnavailable = computed(() => runtimeListed.value === false || runtimeNotFound.value)
+const runtimeUnavailable = computed(() =>
+  runtimeListed.value === false || (runtimeNotFound.value && !snapshot.value))
 
 const runtimeMutation = useMutation({
   mutationFn: ({ id, action }: { id: string; action: 'resume' | 'restart' }) =>
@@ -153,6 +157,23 @@ function openOutputWindow(): void {
             {{ t('serviceRuntime.status.health', { state: snapshot.healthState }) }}
           </n-tag>
         </n-space>
+        <n-alert
+          v-if="snapshot.failureReason != null || snapshot.failureCode != null || snapshot.failureStage != null"
+          type="error"
+          :title="t('serviceRuntime.failure.title')"
+          :show-icon="true"
+          class="runtime-failure"
+        >
+          <div v-if="snapshot.failureReason != null">
+            {{ t('serviceRuntime.failure.reason', { reason: snapshot.failureReason }) }}
+          </div>
+          <div v-if="snapshot.failureCode != null">
+            {{ t('serviceRuntime.failure.code', { code: snapshot.failureCode }) }}
+          </div>
+          <div v-if="snapshot.failureStage != null">
+            {{ t('serviceRuntime.failure.stage', { stage: snapshot.failureStage }) }}
+          </div>
+        </n-alert>
         <n-descriptions bordered :column="2" class="runtime-details">
           <n-descriptions-item :label="t('serviceRuntime.details.uptime')">
             {{ humanizeUptime(snapshot.uptimeMs) }}
@@ -174,6 +195,9 @@ function openOutputWindow(): void {
           </n-descriptions-item>
           <n-descriptions-item :label="t('serviceRuntime.details.lastHealthAt')">
             {{ formatDate(snapshot.lastHealthAt) }}
+          </n-descriptions-item>
+          <n-descriptions-item v-if="snapshot.retryAt" :label="t('serviceRuntime.details.retryAt')">
+            {{ formatDate(snapshot.retryAt ?? null) }}
           </n-descriptions-item>
           <n-descriptions-item :label="t('serviceRuntime.details.owner')">
             {{ snapshot.ownerExtensionId ?? t('common.unknown') }}

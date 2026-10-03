@@ -1,5 +1,6 @@
 import { connection } from '../stores/connection';
 import { defaultControllerBaseUrl, joinHostRoute } from './client';
+import type { ServiceLogEntry } from './types';
 
 export type ServiceOutputStreamKind = 'stdout' | 'stderr';
 
@@ -46,6 +47,7 @@ export function buildServiceOutputUrl(
 export function buildServiceOutputEventStreamUrl(
   serviceId: string,
   stream: ServiceOutputStreamKind,
+  sinceSequence?: number | null,
 ): string | null {
   const configured = connection.baseUrl?.trim();
   const base = configured || defaultControllerBaseUrl();
@@ -53,10 +55,20 @@ export function buildServiceOutputEventStreamUrl(
 
   const url = new URL(joinHostRoute(base, `/v1/services/${serviceId}/output/stream`));
   url.searchParams.set('stream', stream);
+  if (sinceSequence !== undefined && sinceSequence !== null) {
+    url.searchParams.set('since', String(sinceSequence));
+  }
   return url.toString();
 }
 
-export type ServiceOutputEndReason = 'processExited' | 'sessionEnded' | 'fault';
+export type ServiceOutputEndReason =
+  | 'processExited'
+  | 'sessionEnded'
+  | 'fault'
+  | 'extensionUnloaded'
+  | 'serviceDisabled'
+  | 'serviceRemoved'
+  | 'hostShutdown';
 
 export type ServiceOutputEventStreamFailure =
   | { kind: 'http'; status: number; code?: string }
@@ -65,7 +77,8 @@ export type ServiceOutputEventStreamFailure =
 
 export interface ServiceOutputEventStreamHandlers {
   onOpen(): void;
-  onChunk(bytes: Uint8Array): void;
+  onChunk(bytes: Uint8Array, sequence?: number): void;
+  onState(entry: ServiceLogEntry, sequence?: number): void;
   onEnd(reason: ServiceOutputEndReason): void;
   onFailure(failure: ServiceOutputEventStreamFailure): void;
 }
@@ -75,11 +88,6 @@ export interface ServiceOutputEventStreamHandle {
   readonly done: Promise<void>;
 }
 
-/**
- * Opens the service-output SSE stream with fetch so the API key travels in the request header;
- * native EventSource cannot set headers. HostRoute cannot carry a WebSocket upgrade, so this is
- * the only output transport available there.
- */
 export function openServiceOutputEventStream(
   url: string,
   apiKey: string,
@@ -111,25 +119,49 @@ export function openServiceOutputEventStream(
     const reader = response.body.getReader();
     const utf8 = new TextDecoder();
     let pending = '';
-    let eventName = '';
     let ended = false;
 
     const dispatchFrame = (frame: string): void => {
-      for (const line of frame.split('\n')) {
+      let eventName = '';
+      let sequence: number | undefined;
+      const data: string[] = [];
+      for (const rawLine of frame.split('\n')) {
+        const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
         if (line.startsWith(':')) continue;
         if (line.startsWith('event:')) {
           eventName = line.slice(6).trim();
           continue;
         }
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5);
-        if (eventName === 'end') {
-          ended = true;
-          handlers.onEnd(parseServiceOutputEndReason(data));
-        } else {
-          handlers.onChunk(decodeServiceOutputChunk(data));
+        if (line.startsWith('id:')) {
+          const value = line.slice(3).trim();
+          const parsed = Number(value);
+          if (value !== '' && Number.isFinite(parsed)) sequence = parsed;
+          continue;
         }
+        if (!line.startsWith('data:')) continue;
+        const value = line.slice(5);
+        data.push(value.startsWith(' ') ? value.slice(1) : value);
       }
+
+      if (eventName === 'end') {
+        ended = true;
+        handlers.onEnd(parseServiceOutputEndReason(data.join('\n')));
+        return;
+      }
+      if (data.length === 0) return;
+
+      const payload = data.join('\n');
+      if (eventName === 'state') {
+        try {
+          const entry = JSON.parse(payload) as ServiceLogEntry;
+          handlers.onState(entry, sequence ?? entry.sequence ?? undefined);
+        } catch {
+          // Ignore malformed state frames; output data and the rest of the stream remain usable.
+        }
+        return;
+      }
+
+      handlers.onChunk(decodeServiceOutputChunk(payload), sequence);
     };
 
     try {
@@ -190,7 +222,15 @@ export function parseServiceOutputEndReason(data: string): ServiceOutputEndReaso
     const parsed: unknown = JSON.parse(data);
     if (parsed && typeof parsed === 'object' && 'reason' in parsed) {
       const reason: unknown = parsed.reason;
-      if (reason === 'processExited' || reason === 'sessionEnded' || reason === 'fault') {
+      if (
+        reason === 'processExited'
+        || reason === 'sessionEnded'
+        || reason === 'fault'
+        || reason === 'extensionUnloaded'
+        || reason === 'serviceDisabled'
+        || reason === 'serviceRemoved'
+        || reason === 'hostShutdown'
+      ) {
         return reason;
       }
     }
