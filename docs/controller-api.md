@@ -213,11 +213,13 @@ key 必须恰好出现一次，长度 `32..4096`，不能包含空白。HTTP、U
 | --- | --- |
 | `apiVersion` | 固定为 `1` |
 | `ok` | 是否成功 |
-| `code` | 稳定的粗粒度机器码；HTTP status 和 `code` 的兼容映射不变。精确原因使用 `details.reason` |
-| `message` | 每个失败原因对应具体的人类可读文本，应点名 field、parameter 或失败原因；适合展示，不适合程序化分支 |
+| `code` | 稳定的粗粒度机器码；HTTP status 和 `code` 的兼容映射不变。Host `ConfigurationError` 的 `details.reason` / `errors[].reason` 仅由 `Code` 映射（例如 `Validation` → `invalid_value`），不是上游规则 ID |
+| `message` | 人类可读文本，适合展示，不适合程序化分支。Host `ConfigurationError.Message` 原样保留在 `errors[].message`，并出现在顶层 `message` 的首错摘要中 |
 | `details` | 仅错误响应包含；形状为 `{ reason, parameter?, expected?, actual?, traceId? }`。`reason` 是必填、稳定的 snake_case 精确机器码；`parameter` 标识相关 field 或 request parameter，`expected` / `actual` 描述期望与实际条件，其余属性按适用情况提供 |
-| `errors` | 仅配置字段校验失败或配置操作返回多个错误时包含；形状为 `[{ field, reason, message }]`，多错误时必须包含完整列表，不得只保留第一项 |
+| `errors` | 仅配置字段校验失败或配置操作返回多个错误时包含；形状为 `[{ field, reason, message }]`，多错误时必须包含完整列表，不得只保留第一项。Host `ConfigurationError` 不含 field/reason，因此 controller 输出空 `field`，`reason` 仅按 `Code` 映射，不解析 `Message` |
 | `version` | 需要聚合版本的成功响应（包括 reload-settings）的 Host 聚合版本；state、runtime telemetry 和 runtime action 固定为 `null` |
+
+当前 Contracts 的 `ConfigurationError` 只提供 `Code` 和安全的人类可读 `Message`，没有结构化的 `Field` 或规则级 `Reason`。Host 可针对具体失败提供更具体的文本；controller 原样传递该文本，但不会从中推断字段或校验规则。需要 field/rule 级机器诊断时，上游 contract 必须提供相应结构化元数据。
 
 持久化配置和 `reload-settings` 成功响应带强 ETag，例如 `ETag: "42"`；state、runtime telemetry 和 runtime action 成功响应不带 ETag。唯一带 ETag 的失败响应是 extension settings 的 `404 no_settings`（见 6.6），它同样携带聚合版本，供客户端直接完成条件创建。
 
@@ -266,7 +268,9 @@ key 必须恰好出现一次，长度 `32..4096`，不能包含空白。HTTP、U
 | 503 `storage_unavailable` | `install_failed_restore_failed`、`install_failed_restored`、`storage_io_failure`、`unknown_configuration_error` |
 | 503 `response_too_large` | `serialization_too_large` |
 
-`details.traceId` 不是每个 5xx 都有：异常触发的 5xx 会包含它，且可用它关联服务端日志条目；已知条件错误（例如 `bridge_unavailable`、`dispatcher_not_started`、`admission_closed` 和 `serialization_too_large`）不包含 `traceId`。显式记录的 storage、install 或 stream failure 也会带对应的 `traceId`；例如 `storage_io_failure` 在来自已记录的 installer failure 时带该字段，而来自结构化配置错误时不带。任何 5xx 响应都不得包含异常类型或异常 message 文本。所有错误的 `message` 都应说明具体失败；字段验证的每个 `errors[].message` 也应指出相应 field 和原因。客户端应使用 `details.reason` / `errors` 做机器判断，而不是解析 `message`。
+`details.traceId` 不是每个 5xx 都有：异常触发的 5xx 会包含它，且可用它关联服务端日志条目；已知条件错误（例如 `bridge_unavailable`、`dispatcher_not_started`、`admission_closed` 和 `serialization_too_large`）不包含 `traceId`。显式记录的 storage、install 或 stream failure 也会带对应的 `traceId`；例如 `storage_io_failure` 在来自已记录的 installer failure 时带该字段，而来自结构化配置错误时不带。
+
+任何 5xx 响应都不得包含异常类型或异常 `message` 文本。controller 自身可精确定位的校验错误应在 `message` 中说明失败原因，其 `errors[].message` 可点名已知 field 和原因；Host 配置错误则保留 `ConfigurationError.Message` 原文，不保证含 field 或规则 ID。客户端应使用 `details.reason` / `errors` 中实际提供的结构化分类，不解析 `message`。
 
 transport-level admission 失败时，HTTP/Unix 可能直接返回空 body 的 `400`，没有 canonical envelope。客户端不要强行解析这种 body。
 

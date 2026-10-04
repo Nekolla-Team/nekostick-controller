@@ -150,32 +150,43 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
     /// the supplied error, simulating a Host-side write failure (for example a concurrency race
     /// between the controller's read and write) without altering the stored snapshot.
     /// </summary>
-    public void FailNextReplace(ConfigurationErrorCode code)
+    public void FailNextReplace(ConfigurationErrorCode code, string? message = null)
     {
         lock (_sync)
         {
-            _nextReplaceFailure = new ConfigurationError(code);
+            _nextReplaceFailure = CreateConfigurationError(code, message);
         }
     }
     /// <summary>
     /// Makes the next <see cref="IExtensionConfigurationApi.ApplyAsync"/> call fail once with
     /// the supplied error without altering the stored snapshot.
     /// </summary>
-    public void FailNextApply(ConfigurationErrorCode code)
+    public void FailNextApply(ConfigurationErrorCode code, string? message = null)
     {
         lock (_sync)
         {
-            _nextApplyFailure = new ConfigurationError(code);
+            _nextApplyFailure = CreateConfigurationError(code, message);
         }
     }
     /// <summary>Makes the next <see cref="IExtensionManagementApi"/> call fail once with the supplied error.</summary>
-    public void FailNextManagement(ConfigurationErrorCode code)
+    public void FailNextManagement(ConfigurationErrorCode code, string? message = null)
     {
         lock (_sync)
         {
-            _nextManagementFailure = new ConfigurationError(code);
+            _nextManagementFailure = CreateConfigurationError(code, message);
         }
     }
+    private static ConfigurationError CreateConfigurationError(ConfigurationErrorCode code, string? message) =>
+        new(code, message ?? (code switch
+        {
+            ConfigurationErrorCode.Validation => "The configuration change failed validation.",
+            ConfigurationErrorCode.ConcurrencyConflict => "The expected configuration version is stale.",
+            ConfigurationErrorCode.NotFound => "The requested configuration item was not found.",
+            ConfigurationErrorCode.Unsupported => "The requested configuration operation is not supported.",
+            ConfigurationErrorCode.StorageUnavailable => "The configuration store is unavailable.",
+            ConfigurationErrorCode.NoSettings => "The extension settings document was not found.",
+            _ => "The configuration operation failed."
+        }));
 
     /// <summary>Marks an extension as having a running loaded generation for management listings.</summary>
     public void SetExtensionRunning(string extensionId, bool running)
@@ -272,7 +283,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
 
             if (expectedVersion != _snapshot.Version)
             {
-                return ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.ConcurrencyConflict));
+                return ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.ConcurrencyConflict, "The expected configuration version does not match the current version."));
             }
 
             _snapshot = new HostConfigurationSnapshot(
@@ -414,7 +425,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
             }
             if (expectedVersion != _snapshot.Version)
             {
-                return ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.ConcurrencyConflict));
+                return ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.ConcurrencyConflict, "The expected configuration version does not match the current version."));
             }
 
             var newVersion = _snapshot.Version + 1;
@@ -535,7 +546,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
                 string.Equals(value.ExtensionId, settings.ExtensionId, StringComparison.Ordinal));
             if (current is null || expectedVersion != current.Version)
             {
-                return ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.ConcurrencyConflict));
+                return ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.ConcurrencyConflict, "The extension settings document is missing or its version does not match the expected version."));
             }
 
             var replacement = new ExtensionSettingsConfiguration(
@@ -556,7 +567,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
 
             if (settingsIndex < 0)
             {
-                return ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.ConcurrencyConflict));
+                return ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.ConcurrencyConflict, "The extension settings document is no longer present in the configuration snapshot."));
             }
 
             settingsBuilder[settingsIndex] = replacement;
@@ -716,14 +727,14 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
             if (owner.InRouteCallback)
             {
                 // The real Host vetoes the synchronous reload inside a route callback.
-                return ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.Unsupported)));
+                return ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.Unsupported, "Synchronous reload is not supported from a route callback.")));
             }
 
             if (owner.ConsumeManagementFailure() is { } failure) return ValueTask.FromResult(ConfigurationWriteResult.Failure(failure));
             var entry = owner.ReadManagementEntries().FirstOrDefault(candidate => candidate.ExtensionId == extensionId);
-            if (entry is null) return ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.NotFound)));
+            if (entry is null) return ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.NotFound, "The extension record was not found.")));
             if (entry.LoadState != ExtensionLoadState.Loaded)
-                return ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.Validation)));
+                return ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.Validation, "The extension must be loaded before it can be reloaded.")));
             return ValueTask.FromResult(ConfigurationWriteResult.Success(owner.ReadSnapshot().Version));
         }
 
@@ -739,7 +750,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
             cancellationToken.ThrowIfCancellationRequested();
             if (owner.ConsumeManagementFailure() is { } failure) return ValueTask.FromResult(ConfigurationWriteResult.Failure(failure));
             if (owner.ReadManagementEntries().All(candidate => candidate.ExtensionId != extensionId))
-                return ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.NotFound)));
+                return ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.NotFound, "The extension record was not found.")));
             return ValueTask.FromResult(ConfigurationWriteResult.Success(owner.RemoveExtensionRecord(extensionId)));
         }
 
@@ -761,7 +772,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
             cancellationToken.ThrowIfCancellationRequested();
             if (owner.ConsumeManagementFailure() is { } failure) return ValueTask.FromResult(ConfigurationWriteResult.Failure(failure));
             if (owner.ReadManagementEntries().All(candidate => candidate.ExtensionId != extensionId))
-                return ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.NotFound)));
+                return ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.NotFound, "The extension record was not found.")));
             return ValueTask.FromResult(ConfigurationWriteResult.Success(owner.SetExtensionLoadState(extensionId, loadState, running)));
         }
     }
@@ -778,7 +789,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (string.IsNullOrEmpty(extensionId))
-                return ValueTask.FromResult(ConfigurationReadResult<ImmutableArray<ExtensionServiceRuntimeSnapshot>>.Failure(new ConfigurationError(ConfigurationErrorCode.Validation)));
+                return ValueTask.FromResult(ConfigurationReadResult<ImmutableArray<ExtensionServiceRuntimeSnapshot>>.Failure(new ConfigurationError(ConfigurationErrorCode.Validation, "An extension identifier is required to read service runtime snapshots.")));
             return ValueTask.FromResult(ConfigurationReadResult<ImmutableArray<ExtensionServiceRuntimeSnapshot>>.Success(
                 owner.ReadSupervisorSnapshots()
                     .Where(snapshot => string.Equals(snapshot.OwnerExtensionId, extensionId, StringComparison.Ordinal))
@@ -799,7 +810,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
             cancellationToken.ThrowIfCancellationRequested();
             if (!owner.ReadSnapshot().Services.Any(service => service.Id == serviceId))
             {
-                return ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.NotFound)));
+                return ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.NotFound, "The service was not found.")));
             }
 
             var snapshot = owner.ReadSupervisorSnapshots().FirstOrDefault(value => value.ServiceId == serviceId);
@@ -817,7 +828,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
             cancellationToken.ThrowIfCancellationRequested();
             return owner.ReadSnapshot().Services.Any(service => service.Id == serviceId)
                 ? ValueTask.FromResult(ConfigurationWriteResult.Success())
-                : ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.NotFound)));
+                : ValueTask.FromResult(ConfigurationWriteResult.Failure(new ConfigurationError(ConfigurationErrorCode.NotFound, "The service was not found.")));
         }
 
     }
