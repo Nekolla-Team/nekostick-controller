@@ -2,6 +2,20 @@ export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export type JsonObject = { [key: string]: JsonValue };
 
+export interface ApiErrorDetails {
+  reason: string;
+  parameter?: string | null | undefined
+  expected?: string | null | undefined
+  actual?: string | null | undefined
+  traceId?: string | null | undefined
+}
+
+export interface ApiFieldError {
+  field: string;
+  reason: string;
+  message: string;
+}
+
 export interface Envelope<T> {
   apiVersion: 1;
   ok: boolean;
@@ -9,6 +23,8 @@ export interface Envelope<T> {
   message: string;
   data: T | null;
   version: number | null;
+  details?: ApiErrorDetails;
+  errors?: ApiFieldError[];
 }
 export type ControllerResponseEnvelope<T> = Envelope<T>;
 

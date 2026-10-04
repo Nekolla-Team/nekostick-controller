@@ -19,6 +19,7 @@ import {
 } from 'naive-ui'
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import { ApiClientError } from '../api/client'
+import ApiErrorAlert from '../components/ApiErrorAlert.vue'
 import { getRoot } from '../api/resources/root'
 import {
   extensionSettingsPath,
@@ -44,6 +45,8 @@ const cas = useCas(queryClient)
 const loading = ref(false)
 const saving = ref(false)
 const errorMessage = ref<string | null>(null)
+const apiError = ref<ApiClientError | null>(null)
+const apiErrorTitle = ref<string | null>(null)
 const enableHttp = ref(false)
 const httpPort = ref<number | null>(null)
 const enableGrpc = ref(false)
@@ -63,24 +66,14 @@ function isObject(value: JsonValue | undefined): value is JsonObject {
 }
 
 function formatError(error: unknown): string {
-  if (error instanceof ApiClientError) {
-    const reasonKey = `errors.byKind.${error.kind}`
-    const reason = t(reasonKey) === reasonKey ? t('errors.fallback') : t(reasonKey)
-    const detail = [
-      error.status !== undefined ? `HTTP ${error.status}` : null,
-      error.code ?? null,
-      error.message || null,
-    ]
-      .filter((part) => part !== null)
-      .join(' · ')
-    return detail ? `${reason}\n${detail}` : reason
-  }
   return error instanceof Error && error.message !== '' ? error.message : String(error)
 }
 
 async function load(): Promise<void> {
   loading.value = true
   errorMessage.value = null
+  apiError.value = null
+  apiErrorTitle.value = null
   try {
     const settings = await getSettings(controllerExtensionId)
     originalSettings = isObject(settings.settings) ? settings.settings : {}
@@ -106,7 +99,12 @@ async function load(): Promise<void> {
         ? originalSettings.apiKey
         : connection.apiKey ?? ''
   } catch (error: unknown) {
-    errorMessage.value = `${t('controllerConfig.loadFailed')}\n${formatError(error)}`
+    if (error instanceof ApiClientError) {
+      apiError.value = error
+      apiErrorTitle.value = t('controllerConfig.loadFailed')
+    } else {
+      errorMessage.value = `${t('controllerConfig.loadFailed')}\n${formatError(error)}`
+    }
   } finally {
     loading.value = false
   }
@@ -294,6 +292,8 @@ async function reconnect(next: JsonObject): Promise<boolean> {
 async function save(): Promise<void> {
   if (saving.value || loading.value) return
 
+  apiError.value = null
+  apiErrorTitle.value = null
   const validationError = validate()
   if (validationError !== null) {
     errorMessage.value = validationError
@@ -325,8 +325,11 @@ async function save(): Promise<void> {
       errorMessage.value = t('controllerConfig.reconnectFailed')
     }
   } catch (error: unknown) {
-    errorMessage.value = formatError(error)
-  } finally {
+    if (error instanceof ApiClientError) {
+      apiError.value = error
+    } else {
+      errorMessage.value = formatError(error)
+    }
     saving.value = false
   }
 }
@@ -481,8 +484,14 @@ async function save(): Promise<void> {
           >
             {{ t('controllerConfig.bothDisabledWarning') }}
           </n-alert>
+          <ApiErrorAlert
+            v-if="apiError"
+            :error="apiError"
+            :title="apiErrorTitle ?? undefined"
+            class="config-error"
+          />
           <n-alert
-            v-if="errorMessage"
+            v-else-if="errorMessage"
             type="error"
             :show-icon="true"
             class="config-error"

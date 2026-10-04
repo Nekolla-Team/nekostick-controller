@@ -16,6 +16,7 @@ import { ApiClientError, defaultControllerBaseUrl } from '../api/client'
 import { getRoot } from '../api/resources/root'
 import { connection, saveConnection, stageConnection } from '../stores/connection'
 import { IconCatHead } from '../components/icons'
+import ApiErrorAlert from '../components/ApiErrorAlert.vue'
 import { t } from '../i18n'
 
 const router = useRouter()
@@ -24,6 +25,7 @@ const baseUrl = ref(connection.baseUrl ?? '')
 const apiKey = ref(connection.apiKey ?? '')
 const submitting = ref(false)
 const errorMessage = ref<string | null>(null)
+const apiError = ref<ApiClientError | null>(null)
 const locationOrigin = typeof window === 'undefined' ? '' : window.location.origin
 const defaultBaseUrl = defaultControllerBaseUrl() ?? locationOrigin
 const baseUrlPlaceholder = computed(() =>
@@ -35,6 +37,7 @@ async function handleSubmit(): Promise<void> {
 
   submitting.value = true
   errorMessage.value = null
+  apiError.value = null
   const nextBaseUrl = baseUrl.value.trim() || null
   const nextApiKey = apiKey.value
   const previousBaseUrl = connection.baseUrl
@@ -49,18 +52,7 @@ async function handleSubmit(): Promise<void> {
   } catch (error: unknown) {
     stageConnection(previousBaseUrl, previousApiKey)
     if (error instanceof ApiClientError) {
-      const reasonKey = `errors.byKind.${error.kind}`
-      const reason = t(reasonKey) === reasonKey ? t('errors.fallback') : t(reasonKey)
-      const detail = [
-        error.status !== undefined ? `HTTP ${error.status}` : null,
-        error.code ?? null,
-        error.message || null,
-      ]
-        .filter((part) => part !== null)
-        .join(' · ')
-      errorMessage.value = detail
-        ? `${t('connect.failed', { reason })}\n${t('connect.failedDetail', { detail })}`
-        : t('connect.failed', { reason })
+      apiError.value = error
     } else {
       errorMessage.value = t('connect.failedUnknown', {
         message: error instanceof Error && error.message !== '' ? error.message : String(error),
@@ -105,7 +97,8 @@ async function handleSubmit(): Promise<void> {
           >
             {{ t('connect.submit') }}
           </n-button>
-          <n-alert v-if="errorMessage" type="error" :show-icon="true" class="connect-error">
+          <ApiErrorAlert v-if="apiError" :error="apiError" class="connect-error" />
+          <n-alert v-else-if="errorMessage" type="error" :show-icon="true" class="connect-error">
             {{ errorMessage }}
           </n-alert>
           <p class="storage-note">

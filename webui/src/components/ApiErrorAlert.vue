@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { NAlert } from 'naive-ui'
+import { computed, ref } from 'vue'
+import { NAlert, NButton } from 'naive-ui'
 import { ApiClientError, type ApiErrorKind } from '../api/client'
+import ApiErrorDetailsDialog from './ApiErrorDetailsDialog.vue'
 import { t } from '../i18n'
 
 const props = defineProps<{
@@ -34,19 +35,33 @@ function describeError(error: unknown): ErrorDetails {
   }
 }
 
-const details = computed(() => describeError(props.error))
-const summary = computed(() => {
+const errorDetails = computed(() => describeError(props.error))
+const apiError = computed(() => props.error instanceof ApiClientError ? props.error : null)
+const diagnosticLine = computed(() => {
+  const error = apiError.value
+  if (error === null) return ''
   const parts: string[] = []
-  if (details.value.status !== undefined) parts.push(`status=${details.value.status}`)
-  if (details.value.code) parts.push(`code=${details.value.code}`)
-  parts.push(`kind=${details.value.kind}`)
+  if (error.status !== undefined) parts.push(`${t('errors.dialog.status')}: ${error.status}`)
+  if (error.code) parts.push(`${t('errors.dialog.code')}: ${error.code}`)
+  if (error.details?.reason) parts.push(`${t('errors.dialog.reason')}: ${error.details.reason}`)
   return parts.join(' · ')
 })
+const combinedLine = computed(() => {
+  const error = apiError.value
+  if (error === null) return ''
+  return [error.message, diagnosticLine.value].filter(Boolean).join(' · ')
+})
+
+const showDetails = ref(false)
 </script>
 
 <template>
   <n-alert v-if="error" type="error" :title="title ?? t('errors.title')" :show-icon="true">
-    <div>{{ details.message }}</div>
-    <small>{{ summary }}</small>
+    <div>{{ errorDetails.message }}</div>
+    <small v-if="combinedLine">{{ combinedLine }}</small>
+    <n-button v-if="apiError" size="small" text type="primary" @click="showDetails = true">
+      {{ t('errors.dialog.open') }}
+    </n-button>
+    <ApiErrorDetailsDialog v-if="apiError" v-model:show="showDetails" :error="apiError" />
   </n-alert>
 </template>

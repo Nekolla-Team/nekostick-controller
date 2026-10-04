@@ -1,6 +1,6 @@
 import { clearConnection, connection } from '../stores/connection';
 import router from '@/router';
-import type { Envelope } from './types';
+import type { ApiErrorDetails, ApiFieldError, Envelope } from './types';
 
 export type ApiErrorKind =
   | 'unauthorized'
@@ -40,6 +40,8 @@ export interface ApiClientErrorDetails {
   code?: string;
   kind: ApiErrorKind;
   etag?: string;
+  details?: ApiErrorDetails;
+  errors?: ApiFieldError[];
 }
 
 export class ApiClientError extends Error {
@@ -48,7 +50,8 @@ export class ApiClientError extends Error {
   readonly kind: ApiErrorKind;
   /** Strong ETag carried by the failing response, when the controller sends one. */
   readonly etag: string | undefined;
-  readonly details: ApiClientErrorDetails;
+  readonly details?: ApiErrorDetails;
+  readonly errors?: ApiFieldError[];
 
   constructor(message: string, details: ApiClientErrorDetails) {
     super(message);
@@ -57,7 +60,8 @@ export class ApiClientError extends Error {
     this.code = details.code;
     this.kind = details.kind;
     this.etag = details.etag;
-    this.details = details;
+    if (details.details !== undefined) this.details = details.details;
+    if (details.errors !== undefined) this.errors = details.errors;
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
@@ -228,6 +232,8 @@ function throwResponseError(status: number, envelope: Envelope<unknown>, etag: s
     code: envelope.code,
     kind,
     etag,
+    details: envelope.details,
+    errors: envelope.errors,
   });
   if (kind === 'unauthorized') {
     clearConnection();

@@ -20,6 +20,7 @@ import {
 } from 'naive-ui'
 import type { DataTableColumns, DropdownOption } from 'naive-ui'
 import ApiErrorAlert from '../components/ApiErrorAlert.vue'
+import ApiErrorDetailsDialog from '../components/ApiErrorDetailsDialog.vue'
 import JsonEditor from '../components/JsonEditor.vue'
 import { IconDots } from '../components/icons'
 import {
@@ -61,6 +62,8 @@ const extensionsQuery = useQuery({ queryKey: ['extensions'], queryFn: listExtens
 const rows = computed(() => extensionsQuery.data.value ?? [])
 const showUploadModal = ref(false)
 const uploadEntries = ref<UploadEntry[]>([])
+const selectedUploadError = ref<ApiClientError | null>(null)
+const showUploadErrorDetails = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const uploadQueueRunning = ref(false)
 let nextUploadId = 0
@@ -124,6 +127,11 @@ function uploadFailureMessage(entry: UploadEntry): string {
   }
   return t('extensions.install.genericFailure')
 }
+function openUploadErrorDetails(entry: UploadEntry): void {
+  if (!(entry.error instanceof ApiClientError)) return
+  selectedUploadError.value = entry.error
+  showUploadErrorDetails.value = true
+}
 
 function openUploadModal(): void {
   if (!uploadQueueRunning.value && uploadEntries.value.every((entry) => entry.status === 'done' || entry.status === 'failed')) {
@@ -137,6 +145,8 @@ function closeUploadModal(): void {
   uploadGeneration += 1
   cancelExtensionPackageUpload()
   showUploadModal.value = false
+  showUploadErrorDetails.value = false
+  selectedUploadError.value = null
 }
 
 function updateUploadModalVisibility(show: boolean): void {
@@ -469,7 +479,18 @@ const columns = computed<DataTableColumns<ExtensionRecord>>(() => [
                     {{ t('extensions.install.replaced') }}
                   </n-tag>
                 </template>
-                <span v-else-if="entry.status === 'failed'" class="upload-error">{{ t('extensions.install.failed') }}: {{ uploadFailureMessage(entry) }}</span>
+                <span v-else-if="entry.status === 'failed'" class="upload-error">
+                  {{ t('extensions.install.failed') }}: {{ uploadFailureMessage(entry) }}
+                  <n-button
+                    v-if="entry.error instanceof ApiClientError"
+                    text
+                    size="tiny"
+                    type="primary"
+                    @click="openUploadErrorDetails(entry)"
+                  >
+                    {{ t('errors.dialog.open') }}
+                  </n-button>
+                </span>
                 <span v-else-if="entry.status === 'uploading'">{{ t('extensions.install.uploading') }}</span>
                 <span v-else>{{ t('extensions.install.pending') }}</span>
               </div>
@@ -498,6 +519,11 @@ const columns = computed<DataTableColumns<ExtensionRecord>>(() => [
         </div>
       </n-card>
     </n-modal>
+    <ApiErrorDetailsDialog
+      v-if="selectedUploadError"
+      v-model:show="showUploadErrorDetails"
+      :error="selectedUploadError"
+    />
 
     <n-drawer :show="selectedExtensionId !== null" :width="640" @update:show="(show) => { if (!show) closeSettings() }">
       <n-drawer-content :title="t('extensions.settings.title')" closable @close="closeSettings">

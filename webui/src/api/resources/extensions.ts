@@ -70,6 +70,8 @@ function parseInstallResponse(upload: XMLHttpRequest): ExtensionInstallResult {
       status,
       code: parsed.code,
       kind: uploadErrorKind(status, parsed.code),
+      details: parsed.details,
+      errors: parsed.errors,
     });
   }
 

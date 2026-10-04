@@ -28,6 +28,7 @@ import {
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import ApiErrorAlert from '../components/ApiErrorAlert.vue'
+import { ApiClientError } from '../api/client'
 import { IconDots } from '../components/icons'
 import {
   createService,
@@ -99,6 +100,22 @@ const form = reactive<ServiceForm>(blankForm())
 const environmentServiceId = ref<string | null>(null)
 const environmentRows = ref<EnvironmentRow[]>([])
 const environmentError = ref<string | null>(null)
+const environmentApiError = ref<ApiClientError | null>(null)
+
+function clearEnvironmentError(): void {
+  environmentError.value = null
+  environmentApiError.value = null
+}
+
+function setEnvironmentError(error: unknown, fallback: string): void {
+  if (error instanceof ApiClientError) {
+    environmentApiError.value = error
+    environmentError.value = null
+    return
+  }
+  environmentApiError.value = null
+  environmentError.value = error instanceof Error ? error.message : fallback
+}
 
 type ServicePreset = 'resident' | 'onDemand' | 'oneShot'
 
@@ -285,14 +302,14 @@ watch(
 )
 
 function openEnvironment(service: ServiceDto): void {
-  environmentError.value = null
+  clearEnvironmentError()
   environmentServiceId.value = service.id
 }
 
 function closeEnvironment(): void {
   environmentServiceId.value = null
   environmentRows.value = []
-  environmentError.value = null
+  clearEnvironmentError()
 }
 
 function addEnvironmentRow(): void {
@@ -319,9 +336,9 @@ const saveEnvironmentMutation = useMutation({
   },
   onSuccess: async () => {
     await queryClient.invalidateQueries({ queryKey: ['services', environmentServiceId.value, 'environment'] })
-    environmentError.value = null
+    clearEnvironmentError()
   },
-  onError: (error: unknown) => { environmentError.value = error instanceof Error ? error.message : t('services.errors.saveEnvironmentFallback') },
+  onError: (error: unknown) => { setEnvironmentError(error, t('services.errors.saveEnvironmentFallback')) },
 })
 
 const clearEnvironmentMutation = useMutation({
@@ -333,9 +350,9 @@ const clearEnvironmentMutation = useMutation({
   onSuccess: async () => {
     environmentRows.value = []
     await queryClient.invalidateQueries({ queryKey: ['services', environmentServiceId.value, 'environment'] })
-    environmentError.value = null
+    clearEnvironmentError()
   },
-  onError: (error: unknown) => { environmentError.value = error instanceof Error ? error.message : t('services.errors.clearEnvironmentFallback') },
+  onError: (error: unknown) => { setEnvironmentError(error, t('services.errors.clearEnvironmentFallback')) },
 })
 
 function localeEnumKey(value: string): string {
@@ -506,8 +523,7 @@ const columns = computed<DataTableColumns<ServiceDto>>(() => [
       <n-drawer-content :title="t('services.environment.title')" closable @close="closeEnvironment">
         <n-spin :show="environmentQuery.isLoading.value">
           <ApiErrorAlert v-if="environmentQuery.isError.value" :error="environmentQuery.error.value" />
-          <ApiErrorAlert v-if="saveEnvironmentMutation.isError.value" :error="saveEnvironmentMutation.error.value" />
-          <ApiErrorAlert v-if="clearEnvironmentMutation.isError.value" :error="clearEnvironmentMutation.error.value" />
+          <ApiErrorAlert v-if="environmentApiError" :error="environmentApiError" />
           <n-alert v-if="environmentError" type="error" :show-icon="true">{{ environmentError }}</n-alert>
           <n-space vertical>
             <n-space v-for="(row, index) in environmentRows" :key="index" align="center" :wrap="false">
