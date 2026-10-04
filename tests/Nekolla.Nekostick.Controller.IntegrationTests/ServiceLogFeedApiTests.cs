@@ -128,7 +128,7 @@ public sealed class ServiceLogFeedSseApiTests(ControllerApi14Fixture fixture) : 
         var payload = Encoding.UTF8.GetBytes("legacy-output");
         fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
-            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(payload)));
+            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(payload), null));
 
         var response = await HostRouteStreamingTestHelpers.InvokeAsync(
             fixture,
@@ -153,7 +153,12 @@ public sealed class ServiceLogFeedSseApiTests(ControllerApi14Fixture fixture) : 
         var serviceId = Guid.CreateVersion7();
         fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
-            new ExtensionServiceOutputStreamResult(false, ExtensionServiceOutputCode.NotRunning, id, null));
+            new ExtensionServiceOutputStreamResult(
+                false,
+                ExtensionServiceOutputCode.NotRunning,
+                id,
+                null,
+                new ExtensionErrorDetail("The service is not running and has no live output to stream.")));
 
         var response = await HostRouteStreamingTestHelpers.InvokeAsync(
             fixture,
@@ -178,7 +183,12 @@ public sealed class ServiceLogFeedSseApiTests(ControllerApi14Fixture fixture) : 
         var serviceId = Guid.CreateVersion7();
         var payload = Encoding.UTF8.GetBytes("stopped-service-feed");
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
-            new ExtensionServiceOutputStreamResult(false, ExtensionServiceOutputCode.NotRunning, id, null));
+            new ExtensionServiceOutputStreamResult(
+                false,
+                ExtensionServiceOutputCode.NotRunning,
+                id,
+                null,
+                new ExtensionErrorDetail("The service is not running and has no live output to stream.")));
 
         var response = await HostRouteStreamingTestHelpers.InvokeAsync(
             fixture,
@@ -321,7 +331,7 @@ public sealed class ServiceLogFeedWebSocketApiTests(ControllerApi14Fixture fixtu
         var payload = Encoding.UTF8.GetBytes("legacy-websocket-output");
         fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
-            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(payload)));
+            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(payload), null));
 
         using var socket = await ConnectAsync(fixture, serviceId, cancellationToken);
         using var received = new MemoryStream();

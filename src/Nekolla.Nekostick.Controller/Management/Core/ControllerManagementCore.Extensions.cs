@@ -137,8 +137,19 @@ internal sealed partial class ControllerManagementCore
         var entry = read.Value.FirstOrDefault(candidate => string.Equals(candidate.ExtensionId, extensionId, StringComparison.Ordinal));
         if (entry is null) return ControllerManagementResponseBuilder.NotFound(reason: "unknown_extension", message: $"Extension '{extensionId}' was not found.", parameter: extensionId);
         if (entry.LoadState != ExtensionLoadState.Loaded) return ControllerManagementResponseBuilder.InvalidRequest("extension_not_loaded", "The extension must be loaded before it can be reloaded.", "extensionId");
-        if (management.ReloadSoon(extensionId)) return ControllerManagementResponseBuilder.SuccessUnversioned(new ControllerExtensionReloadReadDto { Outcome = "scheduled" });
-        return ControllerManagementResponseBuilder.Unsupported(reason: "reload_not_scheduled", message: $"The host could not schedule a reload for extension '{extensionId}'.", parameter: extensionId);
+        var scheduleResult = management.ReloadSoon(extensionId);
+        if (scheduleResult.Succeeded)
+        {
+            return ControllerManagementResponseBuilder.SuccessUnversioned(new ControllerExtensionReloadReadDto { Outcome = "scheduled" });
+        }
+
+        var message = scheduleResult is ExtensionReloadScheduleFailureResult failure
+            ? failure.Detail.Message
+            : $"The host could not schedule a reload for extension '{extensionId}'.";
+        return ControllerManagementResponseBuilder.Unsupported(
+            reason: "reload_not_scheduled",
+            message: message,
+            parameter: "extensionId");
     }
 
     private static bool TryGetExtensionActionPath(string path, out string extensionId, out string action)

@@ -23,7 +23,7 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
         fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         var payload = Encoding.UTF8.GetBytes("hello\nworld\n");
         fixture.Host.ServiceOutputFake.OnOpen((id, stream) =>
-            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(payload)));
+            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(payload), null));
 
         using var socket = await ConnectAsync(fixture.HttpPort, serviceId, TestContext.Current.CancellationToken);
         var received = await ReceiveUntilCloseAsync(socket, TestContext.Current.CancellationToken);
@@ -41,7 +41,7 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
         var serviceId = Guid.CreateVersion7();
         fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         fixture.Host.ServiceOutputFake.OnOpen((id, stream) =>
-            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(Array.Empty<byte>())));
+            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(Array.Empty<byte>()), null));
 
         using var socket = await ConnectAsync(fixture.HttpPort, serviceId, TestContext.Current.CancellationToken, "?stream=stderr");
         await ReceiveUntilCloseAsync(socket, TestContext.Current.CancellationToken);
@@ -57,7 +57,7 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
         fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         var payload = Encoding.UTF8.GetBytes("via-subprotocol\n");
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
-            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(payload)));
+            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(payload), null));
 
         using var socket = await ConnectAsync(
             fixture.HttpPort,
@@ -76,7 +76,7 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
         fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         var payload = Encoding.UTF8.GetBytes("header-wins\n");
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
-            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(payload)));
+            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(payload), null));
 
         using var socket = new ClientWebSocket();
         socket.Options.SetRequestHeader(ControllerManagementApiContract.ApiKeyHeaderName, ControllerApiFixture.ApiKey);
@@ -150,7 +150,12 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
         var serviceId = Guid.CreateVersion7();
         fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
-            new ExtensionServiceOutputStreamResult(false, ExtensionServiceOutputCode.NotFound, id, null));
+            new ExtensionServiceOutputStreamResult(
+                false,
+                ExtensionServiceOutputCode.NotFound,
+                id,
+                null,
+                new ExtensionErrorDetail("The service was not found.")));
 
         using var client = fixture.CreateHttpClient();
         using var request = CreateUpgradeRequest($"/v1/services/{serviceId}/output/stream", ControllerApiFixture.ApiKey);
@@ -165,7 +170,12 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
         var serviceId = Guid.CreateVersion7();
         fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
-            new ExtensionServiceOutputStreamResult(false, ExtensionServiceOutputCode.NotRunning, id, null));
+            new ExtensionServiceOutputStreamResult(
+                false,
+                ExtensionServiceOutputCode.NotRunning,
+                id,
+                null,
+                new ExtensionErrorDetail("The service is not running and has no live output to stream.")));
 
         using var client = fixture.CreateHttpClient();
         using var request = CreateUpgradeRequest($"/v1/services/{serviceId}/output/stream", ControllerApiFixture.ApiKey);
@@ -185,7 +195,7 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
         fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         var output = new BlockingOutputStream();
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
-            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, output));
+            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, output, null));
 
         using var socket = await ConnectAsync(fixture.HttpPort, serviceId, TestContext.Current.CancellationToken);
         await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", TestContext.Current.CancellationToken);
@@ -261,7 +271,7 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
         fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         var payload = Encoding.UTF8.GetBytes("hello\nworld\n");
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
-            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(payload)));
+            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(payload), null));
 
         var response = await InvokeHostRouteStreamAsync(
             $"/v1/services/{serviceId}/output/stream?stream=stdout", withApiKey: true, cancellationToken);
@@ -290,7 +300,7 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
         var serviceId = Guid.CreateVersion7();
         fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
-            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(Array.Empty<byte>())));
+            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, new MemoryStream(Array.Empty<byte>()), null));
 
         var response = await InvokeHostRouteStreamAsync(
             $"/v1/services/{serviceId}/output/stream?stream=stderr", withApiKey: true, TestContext.Current.CancellationToken);
@@ -319,7 +329,12 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
         var serviceId = Guid.CreateVersion7();
         fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
-            new ExtensionServiceOutputStreamResult(false, ExtensionServiceOutputCode.NotFound, id, null));
+            new ExtensionServiceOutputStreamResult(
+                false,
+                ExtensionServiceOutputCode.NotFound,
+                id,
+                null,
+                new ExtensionErrorDetail("The service was not found.")));
 
         var response = await InvokeHostRouteStreamAsync(
             $"/v1/services/{serviceId}/output/stream", withApiKey: true, TestContext.Current.CancellationToken);
@@ -332,7 +347,12 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
         var serviceId = Guid.CreateVersion7();
         fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
-            new ExtensionServiceOutputStreamResult(false, ExtensionServiceOutputCode.NotRunning, id, null));
+            new ExtensionServiceOutputStreamResult(
+                false,
+                ExtensionServiceOutputCode.NotRunning,
+                id,
+                null,
+                new ExtensionErrorDetail("The service is not running and has no live output to stream.")));
 
         var response = await InvokeHostRouteStreamAsync(
             $"/v1/services/{serviceId}/output/stream", withApiKey: true, TestContext.Current.CancellationToken);
@@ -409,7 +429,7 @@ public sealed class ServiceOutputStreamSessionTests(ControllerApi14Fixture fixtu
         fixture.Host.ServiceOutputFake.Reject(serviceId, ExtensionServiceLogCode.Unsupported);
         var output = new BlockingOutputStream();
         fixture.Host.ServiceOutputFake.OnOpen((id, _) =>
-            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, output));
+            new ExtensionServiceOutputStreamResult(true, ExtensionServiceOutputCode.Opened, id, output, null));
 
         using var socket = new ClientWebSocket();
         socket.Options.SetRequestHeader(ControllerManagementApiContract.ApiKeyHeaderName, ControllerApiFixture.ApiKey);

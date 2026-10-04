@@ -455,8 +455,8 @@ public sealed class ExtensionsApi134Tests(ControllerApi134Fixture fixture) : ICl
     {
         fixture.Host.SetRefreshSkips(
         [
-            new ExtensionScanSkip("broken-ext", "ManifestMissing"),
-            new ExtensionScanSkip("bad-json", "JsonInvalid")
+            new ExtensionScanSkip("broken-ext", "ManifestMissing", new ExtensionErrorDetail("The extension manifest is missing.")),
+            new ExtensionScanSkip("bad-json", "JsonInvalid", new ExtensionErrorDetail("The extension manifest contains invalid JSON."))
         ]);
 
         using var client = fixture.CreateHttpClient();

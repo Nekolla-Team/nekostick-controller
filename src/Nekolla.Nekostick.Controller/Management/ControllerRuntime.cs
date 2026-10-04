@@ -280,9 +280,13 @@ internal sealed class ControllerRuntime
                             throw new InvalidOperationException("The management handler has no stable identifier.");
                         }
 
-                        if (!registration.TryRegisterHandler(handler))
+                        var registrationResult = registration.TryRegisterHandler(handler);
+                        if (!registrationResult.Succeeded)
                         {
-                            throw new InvalidOperationException("The management handler registration was rejected.");
+                            var message = registrationResult is ExtensionRegistrationFailureResult failure
+                                ? $"The management handler registration was rejected. {failure.Detail.Message}"
+                                : "The management handler registration was rejected.";
+                            throw new InvalidOperationException(message);
                         }
 
                         handlerId = handler.HandlerId;
@@ -899,9 +903,13 @@ internal sealed class ControllerRuntime
             throw new InvalidOperationException("The ephemeral bootstrap handler identity is not fixed.");
         }
 
-        if (!registration.TryRegisterStreamingHandler(handler))
+        var registrationResult = registration.TryRegisterStreamingHandler(handler);
+        if (!registrationResult.Succeeded)
         {
-            throw new InvalidOperationException("The streaming management handler registration was rejected.");
+            var message = registrationResult is ExtensionRegistrationFailureResult failure
+                ? $"The streaming management handler registration was rejected. {failure.Detail.Message}"
+                : "The streaming management handler registration was rejected.";
+            throw new InvalidOperationException(message);
         }
 
         handlerId = handler.HandlerId;
@@ -1044,9 +1052,13 @@ internal sealed class ControllerRuntime
 
         var registration = _registration;
         var handlerId = _handlerId;
-        if (!registration.TryUnregisterHandler(handlerId))
+        var unregistrationResult = registration.TryUnregisterHandler(handlerId);
+        if (!unregistrationResult.Succeeded)
         {
-            throw new InvalidOperationException("The management handler could not be unregistered.");
+            var message = unregistrationResult is ExtensionRegistrationFailureResult failure
+                ? $"The management handler could not be unregistered. {failure.Detail.Message}"
+                : "The management handler could not be unregistered.";
+            throw new InvalidOperationException(message);
         }
 
         _registration = null;

@@ -738,11 +738,11 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
             return ValueTask.FromResult(ConfigurationWriteResult.Success(owner.ReadSnapshot().Version));
         }
 
-        public bool ReloadSoon(string extensionId)
+        public ExtensionReloadScheduleResult ReloadSoon(string extensionId)
         {
-            if (owner.ReadReloadScheduleRefused()) return false;
+            if (owner.ReadReloadScheduleRefused()) return ExtensionReloadScheduleResult.Unsupported;
             owner.RecordScheduledReload(extensionId);
-            return true;
+            return ExtensionReloadScheduleResult.Success;
         }
 
         public ValueTask<ConfigurationWriteResult> DeleteRecordAsync(string extensionId, CancellationToken cancellationToken)
@@ -905,8 +905,9 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
     {
         public ImmutableArray<ExtensionEndpointLease> Current => ImmutableArray<ExtensionEndpointLease>.Empty;
 
-        public ValueTask<ExtensionEndpointLease?> ResolveAsync(Guid serviceId, CancellationToken cancellationToken) =>
-            ValueTask.FromResult<ExtensionEndpointLease?>(new ExtensionEndpointLease(serviceId, 0, DateTimeOffset.UtcNow));
+        public ValueTask<ExtensionEndpointResolutionResult> ResolveAsync(Guid serviceId, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(ExtensionEndpointResolutionResult.Success(
+                new ExtensionEndpointLease(serviceId, 1, DateTimeOffset.UtcNow)));
     }
 
     private sealed class FakeLifecycleApi : IExtensionLifecycleApi
@@ -923,30 +924,45 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
 
     private sealed class FakeContractRegistry : IExtensionContractRegistry
     {
-        public bool TryExport<TContract>(string contractId, TContract implementation) where TContract : class => false;
-        public bool TryImport<TContract>(string contractId, out TContract? contract) where TContract : class
-        {
-            contract = null;
-            return false;
-        }
+        public ExtensionContractExportResult TryExport<TContract>(string contractId, TContract implementation) where TContract : class =>
+            ExtensionContractExportResult.Failure(
+                ExtensionContractExportFailureCode.NotDeclared,
+                new ExtensionErrorDetail($"Contract '{contractId}' is not declared for export."));
+
+        public ExtensionContractImportResult<TContract> TryImport<TContract>(string contractId) where TContract : class =>
+            ExtensionContractImportResult<TContract>.Failure(
+                ExtensionContractImportFailureCode.NotDeclared,
+                new ExtensionErrorDetail($"Contract '{contractId}' is not declared for import."));
     }
 
     private sealed class FakeTaskScheduler : IExtensionTaskScheduler
     {
-        public ValueTask<bool> StartAsync(string taskName, Func<CancellationToken, ValueTask> callback) =>
-            ValueTask.FromResult(false);
+        public ValueTask<ExtensionTaskStartResult> StartAsync(string taskName, Func<CancellationToken, ValueTask> callback) =>
+            ValueTask.FromResult(ExtensionTaskStartResult.Failure(
+                ExtensionTaskStartFailureCode.Stopped,
+                new ExtensionErrorDetail("The task scheduler is stopped.")));
     }
 
     private sealed class FakeEventPublisher : IExtensionEventPublisher
     {
-        public bool TryPublish(ExtensionEvent @event) => false;
-        public bool TrySubscribe(Func<ExtensionEvent, CancellationToken, ValueTask> callback) => false;
+        public ExtensionEventPublishResult TryPublish(ExtensionEvent @event) =>
+            ExtensionEventPublishResult.Failure(
+                ExtensionEventPublishFailureCode.Unavailable,
+                new ExtensionErrorDetail("The event queue is unavailable."));
+
+        public ExtensionEventSubscribeResult TrySubscribe(Func<ExtensionEvent, CancellationToken, ValueTask> callback) =>
+            ExtensionEventSubscribeResult.Failure(
+                ExtensionEventSubscribeFailureCode.Unavailable,
+                new ExtensionErrorDetail("The event queue is unavailable."));
     }
 
     private sealed class FakeRouteEvents : IExtensionRouteEvents
     {
-        public bool TrySubscribe(Func<ExtensionEvent, CancellationToken, ValueTask> callback) => false;
-        public bool TryRegisterHook(ExtensionRouteEventStage stage, Func<ExtensionRouteHookContext, CancellationToken, ValueTask<ExtensionRouteHookResult>> callback) => false;
+        public ExtensionRouteRegistrationResult TrySubscribe(Func<ExtensionEvent, CancellationToken, ValueTask> callback) =>
+            ExtensionRouteRegistrationResult.Unsupported;
+
+        public ExtensionRouteRegistrationResult TryRegisterHook(ExtensionRouteEventStage stage, Func<ExtensionRouteHookContext, CancellationToken, ValueTask<ExtensionRouteHookResult>> callback) =>
+            ExtensionRouteRegistrationResult.Unsupported;
     }
 
     private sealed class FakeDependencyApi : IExtensionDependencyApi
@@ -962,10 +978,16 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
         public string VersionRange => string.Empty;
         public string? InstalledVersion => null;
 
-        public bool TryImport<TContract>(string contractId, out TContract? contract) where TContract : class
+        public ExtensionContractImportResult<TContract> TryImport<TContract>(string contractId) where TContract : class
         {
-            contract = null;
-            return false;
+            var installedVersion = InstalledVersion is null ? "not installed" : $"version '{InstalledVersion}'";
+            var range = string.IsNullOrWhiteSpace(VersionRange)
+                ? "no declared version range"
+                : $"required range '{VersionRange}'";
+            return ExtensionContractImportResult<TContract>.Failure(
+                ExtensionContractImportFailureCode.DependencyUnsatisfied,
+                new ExtensionErrorDetail(
+                    $"Dependency '{ExtensionId}' has state {State} with {installedVersion}; {range} is not satisfied, so contract '{contractId}' cannot be imported."));
         }
     }
 
@@ -1037,7 +1059,12 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
             _opens.Enqueue((serviceId, stream));
             return ValueTask.FromResult(
                 _openHandler?.Invoke(serviceId, stream) ??
-                new ExtensionServiceOutputStreamResult(false, ExtensionServiceOutputCode.NotFound, serviceId, null));
+                new ExtensionServiceOutputStreamResult(
+                    false,
+                    ExtensionServiceOutputCode.NotFound,
+                    serviceId,
+                    null,
+                    new ExtensionErrorDetail("The service was not found.")));
         }
 
         public ValueTask<ExtensionServiceLogSubscriptionResult> SubscribeAsync(
@@ -1050,7 +1077,21 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
             _subscriptions.Enqueue((serviceId, sinceSequence));
             if (_rejections.TryGetValue(serviceId, out var rejection))
             {
-                return ValueTask.FromResult(new ExtensionServiceLogSubscriptionResult(false, rejection, serviceId, null));
+                var detail = rejection switch
+                {
+                    ExtensionServiceLogCode.NotFound => new ExtensionErrorDetail("The service was not found."),
+                    ExtensionServiceLogCode.InvalidArgument or ExtensionServiceLogCode.InvalidCursor =>
+                        new ExtensionErrorDetail("The 'sinceSequence' parameter must be a non-negative log sequence number."),
+                    ExtensionServiceLogCode.Unsupported =>
+                        new ExtensionErrorDetail("The host does not support the requested service log feed."),
+                    _ => new ExtensionErrorDetail("The host could not open a service log feed.")
+                };
+                return ValueTask.FromResult(new ExtensionServiceLogSubscriptionResult(
+                    false,
+                    rejection,
+                    serviceId,
+                    null,
+                    detail));
             }
 
             var subscription = new Subscription(this, serviceId, sink);
@@ -1069,7 +1110,8 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
                 true,
                 ExtensionServiceLogCode.Subscribed,
                 serviceId,
-                subscription));
+                subscription,
+                null));
         }
 
         private void Unregister(Guid serviceId, IExtensionServiceLogSink sink)
@@ -1177,7 +1219,10 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
 
                 if (_rejection is { } rejection)
                 {
-                    return ValueTask.FromResult(new ExtensionServiceRuntimeStateSubscriptionResult(false, rejection, null));
+                    var detail = rejection == ExtensionServiceRuntimeStateSubscriptionCode.Unsupported
+                        ? new ExtensionErrorDetail("The host does not support service runtime-state subscriptions.")
+                        : new ExtensionErrorDetail($"The host rejected the service runtime-state subscription with code '{rejection}'.");
+                    return ValueTask.FromResult(new ExtensionServiceRuntimeStateSubscriptionResult(false, rejection, null, detail));
                 }
 
                 _sinks.Add(sink);
@@ -1187,7 +1232,8 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
             return ValueTask.FromResult(new ExtensionServiceRuntimeStateSubscriptionResult(
                 true,
                 ExtensionServiceRuntimeStateSubscriptionCode.Subscribed,
-                subscription));
+                subscription,
+                null));
         }
 
         private void Unregister(IExtensionServiceRuntimeStateSink sink)
@@ -1226,38 +1272,42 @@ public sealed class FakeExtensionRegistration : IExtensionRegistration
     public IExtensionHandler? Handler { get; private set; }
     public IExtensionStreamingHandler? StreamingHandler { get; private set; }
 
-    public bool TryRegisterHandler(IExtensionHandler handler)
+    public ExtensionRegistrationResult TryRegisterHandler(IExtensionHandler handler)
     {
         Handler = handler;
-        return true;
+        return ExtensionRegistrationResult.Success;
     }
 
-    public bool TryRegisterStreamingHandler(IExtensionStreamingHandler handler)
+    public ExtensionRegistrationResult TryRegisterStreamingHandler(IExtensionStreamingHandler handler)
     {
         StreamingHandler = handler;
-        return true;
+        return ExtensionRegistrationResult.Success;
     }
 
-    public bool TryRegisterFallback(IExtensionFallback fallback) => false;
+    public ExtensionRegistrationResult TryRegisterFallback(IExtensionFallback fallback) => ExtensionRegistrationResult.Unsupported;
 
-    public bool TryUnregisterHandler(string handlerId)
+    public ExtensionRegistrationResult TryUnregisterHandler(string handlerId)
     {
         if (Handler is not null && string.Equals(Handler.HandlerId, handlerId, StringComparison.Ordinal))
         {
             Handler = null;
-            return true;
+            return ExtensionRegistrationResult.Success;
         }
 
         if (StreamingHandler is not null && string.Equals(StreamingHandler.HandlerId, handlerId, StringComparison.Ordinal))
         {
             StreamingHandler = null;
-            return true;
+            return ExtensionRegistrationResult.Success;
         }
 
-        return false;
+        return ExtensionRegistrationResult.Failure(
+            ExtensionRegistrationFailureCode.NotFound,
+            new ExtensionErrorDetail("The handler is not registered."));
     }
 
-    public bool TryUnregisterFallback() => false;
+    public ExtensionRegistrationResult TryUnregisterFallback() => ExtensionRegistrationResult.Failure(
+        ExtensionRegistrationFailureCode.NotFound,
+        new ExtensionErrorDetail("No fallback is registered."));
 }
 
 /// <summary>Start context handed to the controller entrypoint under test.</summary>
