@@ -407,6 +407,8 @@ public sealed class ExtensionsApiTests(ControllerApiFixture fixture) : IClassFix
         Assert.Equal(1, envelope.GetProperty("apiVersion").GetInt32());
         Assert.False(envelope.GetProperty("ok").GetBoolean());
         Assert.Equal(code, envelope.GetProperty("code").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(envelope.GetProperty("details").GetProperty("reason").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(envelope.GetProperty("message").GetString()));
     }
 }
 
@@ -540,7 +542,8 @@ public sealed class SelfDisableGuardApiTests(ControllerApiFixture fixture) : ICl
         Assert.Equal(HttpStatusCode.BadRequest, blocked.StatusCode);
         using var blockedDocument = JsonDocument.Parse(await blocked.Content.ReadAsStringAsync(cancellationToken));
         Assert.Equal("invalid_request", blockedDocument.RootElement.GetProperty("code").GetString());
-        Assert.Contains("forbid", blockedDocument.RootElement.GetProperty("message").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(blockedDocument.RootElement.GetProperty("details").GetProperty("reason").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(blockedDocument.RootElement.GetProperty("message").GetString()));
 
         // Only disable is gated: other actions on the same id still reach the Host unchanged.
         // The fixture has no controller record, so a 404 proves the request passed the gate.
@@ -565,6 +568,8 @@ public sealed class SelfDisableGuardApiTests(ControllerApiFixture fixture) : ICl
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
         Assert.Equal("not_found", document.RootElement.GetProperty("code").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty("details").GetProperty("reason").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty("message").GetString()));
     }
 
     private static async Task SetPreventSelfDisableAsync(ControllerApiFixture fixture, bool enabled)

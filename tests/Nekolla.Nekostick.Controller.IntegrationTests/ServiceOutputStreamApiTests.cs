@@ -174,6 +174,8 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         Assert.Equal("not_running", document.RootElement.GetProperty("code").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty("details").GetProperty("reason").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty("message").GetString()));
     }
 
     [Fact]
@@ -307,6 +309,8 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
         Assert.Equal(401, response.StatusCode);
         using var document = await JsonDocument.ParseAsync(response.BodyStream, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("unauthorized", document.RootElement.GetProperty("code").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty("details").GetProperty("reason").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty("message").GetString()));
     }
 
     [Fact]
@@ -335,6 +339,8 @@ public sealed class ServiceOutputStreamApi14Tests(ControllerApi14Fixture fixture
         Assert.Equal(409, response.StatusCode);
         using var document = await JsonDocument.ParseAsync(response.BodyStream, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("not_running", document.RootElement.GetProperty("code").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty("details").GetProperty("reason").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty("message").GetString()));
     }
 
     [Fact]

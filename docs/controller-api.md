@@ -161,7 +161,7 @@ Web UI 由 controller extension settings 中的 `enableWebUi` 控制。该设置
 x-nekostick-controller-key: <API_KEY>
 ```
 
-key 必须恰好出现一次，长度 `32..4096`，不能包含空白。HTTP、Unix 和 HostRoute 使用 header；gRPC 使用 metadata。缺失、重复、弱值、超长或不匹配都会返回 `401 unauthorized`，不会透露具体失败原因。
+key 必须恰好出现一次，长度 `32..4096`，不能包含空白。HTTP、Unix 和 HostRoute 使用 header；gRPC 使用 metadata。缺失、重复或无效的 key 返回 `401 unauthorized`，`details.reason` 为 `api_key_missing` 或 `api_key_invalid`。超长 key 在 HTTP、Unix 和 HostRoute 上返回 `400 invalid_request`，reason 为 `api_key_too_large`；gRPC 将其作为无效 key 返回 `401 unauthorized` / `api_key_invalid`。响应不会回显 key。
 
 主要请求限制：
 
@@ -200,9 +200,12 @@ key 必须恰好出现一次，长度 `32..4096`，不能包含空白。HTTP、U
   "apiVersion": 1,
   "ok": false,
   "code": "invalid_request",
-  "message": "The management request is invalid.",
+  "message": "The request body must contain valid JSON for a service resource.",
   "data": null,
-  "version": null
+  "version": null,
+  "details": {
+    "reason": "malformed_json"
+  }
 }
 ```
 
@@ -210,8 +213,10 @@ key 必须恰好出现一次，长度 `32..4096`，不能包含空白。HTTP、U
 | --- | --- |
 | `apiVersion` | 固定为 `1` |
 | `ok` | 是否成功 |
-| `code` | 稳定机器码，客户端应按它分支 |
-| `message` | 固定人类可读文本，不适合程序化分支 |
+| `code` | 稳定的粗粒度机器码；HTTP status 和 `code` 的兼容映射不变。精确原因使用 `details.reason` |
+| `message` | 每个失败原因对应具体的人类可读文本，应点名 field、parameter 或失败原因；适合展示，不适合程序化分支 |
+| `details` | 仅错误响应包含；形状为 `{ reason, parameter?, expected?, actual?, traceId? }`。`reason` 是必填、稳定的 snake_case 精确机器码；`parameter` 标识相关 field 或 request parameter，`expected` / `actual` 描述期望与实际条件，其余属性按适用情况提供 |
+| `errors` | 仅配置字段校验失败或配置操作返回多个错误时包含；形状为 `[{ field, reason, message }]`，多错误时必须包含完整列表，不得只保留第一项 |
 | `version` | 需要聚合版本的成功响应（包括 reload-settings）的 Host 聚合版本；state、runtime telemetry 和 runtime action 固定为 `null` |
 
 持久化配置和 `reload-settings` 成功响应带强 ETag，例如 `ETag: "42"`；state、runtime telemetry 和 runtime action 成功响应不带 ETag。唯一带 ETag 的失败响应是 extension settings 的 `404 no_settings`（见 6.6），它同样携带聚合版本，供客户端直接完成条件创建。
@@ -224,7 +229,7 @@ key 必须恰好出现一次，长度 `32..4096`，不能包含空白。HTTP、U
 | 201 | `ok` | POST 创建成功；带 `Location` |
 | 204 | 无 body | DELETE 成功；响应 header 带新 ETag |
 | 400 | `invalid_request` | JSON、header、body、ID、path 或资源语义无效 |
-| 401 | `unauthorized` | API key 无效 |
+| 401 | `unauthorized` | API key 缺失或无效 |
 | 404 | `transport_disabled` | 当前 transport 未启用 |
 | 404 | `not_found` | 资源不存在 |
 | 404 | `no_settings` | extension record 存在但没有 settings 文档；响应带聚合 ETag |
@@ -235,9 +240,33 @@ key 必须恰好出现一次，长度 `32..4096`，不能包含空白。HTTP、U
 | 412 | `precondition_failed` | `If-Match` 已过期 |
 | 428 | `precondition_required` | mutation 缺少 `If-Match` |
 | 501 | `unsupported` | Host API、能力或操作不支持 |
-| 503 | `unavailable` | controller 或 Host bridge 不可用 |
-| 503 | `storage_unavailable` | Host 配置存储或 runtime 数据不可用 |
+| 503 | `unavailable` | controller runtime、dispatcher 或 Host bridge 不可用，或服务端无法完成管理操作 |
+| 503 | `storage_unavailable` | Host 配置存储或扩展安装存储不可用 |
 | 503 | `response_too_large` | 响应超过 `1 MiB` |
+
+### 精确错误原因
+
+下表列出当前 controller 实际发出的全部 `details.reason`，按 HTTP status 与原有 envelope `code` 分组；每行对应一个 coarse code。同一 reason 若在不同 code 下发出，会分别列出。
+
+| Status / envelope code | `details.reason` |
+| --- | --- |
+| 400 `invalid_request` | `api_key_too_large`、`body_too_large`、`duplicate_settings`、`empty_body`、`extension_not_loaded`、`if_match_malformed`、`if_match_multiple`、`invalid_argument`、`invalid_body`、`invalid_extension_id`、`invalid_field`、`invalid_header`、`invalid_id`、`invalid_method`、`invalid_package`、`invalid_path`、`invalid_settings`、`invalid_stream_query`、`invalid_value`、`invalid_version`、`listener_required`、`malformed_json`、`manifest_invalid`、`manifest_invalid_json`、`manifest_missing`、`manifest_too_large`、`missing_field`、`missing_method`、`package_extracted_size_too_large`、`package_too_large`、`request_read_failed`、`self_disable_forbidden`、`unexpected_body`、`unsupported_media_type`、`unsafe_archive_entry`、`websocket_upgrade_invalid` |
+| 401 `unauthorized` | `api_key_missing`、`api_key_invalid` |
+| 404 `transport_disabled` | `transport_disabled` |
+| 404 `not_found` | `settings_absent`、`unknown_extension`、`unknown_path`、`unknown_resource`、`unknown_route`、`unknown_service` |
+| 404 `no_settings` | `settings_absent` |
+| 405 `method_not_allowed` | `method_not_allowed` |
+| 409 `reserved_route` | `reserved_route` |
+| 409 `downgrade_forbidden` | `downgrade_forbidden` |
+| 409 `not_running` | `not_running` |
+| 412 `precondition_failed` | `if_match_stale` |
+| 428 `precondition_required` | `if_match_missing` |
+| 501 `unsupported` | `extension_management_unavailable`、`host_api_unsupported`、`operation_not_supported`、`reload_not_scheduled`、`runtime_state_feed_unavailable`、`streaming_required` |
+| 503 `unavailable` | `admission_closed`、`bridge_unavailable`、`dispatcher_not_started`、`host_config_read_failed`、`invalid_dispatcher_response`、`reload_handler_unavailable`、`resource_acquisition_pending`、`runtime_not_started`、`state_provider_unavailable`、`stream_admission_failed`、`stream_open_failed`、`telemetry_provider_unavailable`、`unexpected_exception` |
+| 503 `storage_unavailable` | `install_failed_restore_failed`、`install_failed_restored`、`storage_io_failure`、`unknown_configuration_error` |
+| 503 `response_too_large` | `serialization_too_large` |
+
+`details.traceId` 不是每个 5xx 都有：异常触发的 5xx 会包含它，且可用它关联服务端日志条目；已知条件错误（例如 `bridge_unavailable`、`dispatcher_not_started`、`admission_closed` 和 `serialization_too_large`）不包含 `traceId`。显式记录的 storage、install 或 stream failure 也会带对应的 `traceId`；例如 `storage_io_failure` 在来自已记录的 installer failure 时带该字段，而来自结构化配置错误时不带。任何 5xx 响应都不得包含异常类型或异常 message 文本。所有错误的 `message` 都应说明具体失败；字段验证的每个 `errors[].message` 也应指出相应 field 和原因。客户端应使用 `details.reason` / `errors` 做机器判断，而不是解析 `message`。
 
 transport-level admission 失败时，HTTP/Unix 可能直接返回空 body 的 `400`，没有 canonical envelope。客户端不要强行解析这种 body。
 

@@ -9,15 +9,15 @@ internal sealed partial class ControllerManagementCore
 {
     private async ValueTask<ControllerManagementResponse> ReadServicesAsync(ControllerManagementRequest request, CancellationToken cancellationToken)
     {
-        if (!RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
+        if (!RequireEmptyBody(request)) return UnexpectedBodyResponse();
         var read = await ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
         return ControllerManagementResponseBuilder.Success(snapshot.Services.Select(ControllerContractMapper.ToRead).ToImmutableArray(), snapshot.Version);
     }
     private async ValueTask<ControllerManagementResponse> ReadServiceRuntimesAsync(ControllerManagementRequest request, CancellationToken cancellationToken)
     {
-        if (!RequireNoIfMatch(request) || !RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
-        if (_bridge is not IExtensionHostBridge13 bridge13 || !ExtensionHostApiSupport.IsApi13Supported(bridge13.ApiVersion)) return ControllerManagementResponseBuilder.Unsupported;
+        if (ValidateNoBodyRequest(request) is { } validationError) return validationError;
+        if (_bridge is not IExtensionHostBridge13 bridge13 || !ExtensionHostApiSupport.IsApi13Supported(bridge13.ApiVersion)) return ControllerManagementResponseBuilder.Unsupported(reason: "host_api_unsupported", message: "This host does not support service runtime snapshots.");
         var read = await bridge13.Supervisor.ReadAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
         var snapshots = read.Value.IsDefault
@@ -35,29 +35,29 @@ internal sealed partial class ControllerManagementCore
     {
         if (_bridge is null)
         {
-            return ControllerRuntimeFeedResult.Rejected(ControllerManagementResponseBuilder.Unavailable);
+            return ControllerRuntimeFeedResult.Rejected(ControllerManagementResponseBuilder.Unavailable(reason: "bridge_unavailable", message: "The host management bridge is unavailable."));
         }
 
         if (!HasFullConfigurationScope() || !ExtensionHostApiSupport.IsApi13Supported(_bridge.ApiVersion))
         {
-            return ControllerRuntimeFeedResult.Rejected(ControllerManagementResponseBuilder.Unsupported);
+            return ControllerRuntimeFeedResult.Rejected(ControllerManagementResponseBuilder.Unsupported(reason: "host_api_unsupported", message: "This host does not support service runtime state feeds."));
         }
 
         var feed = _runtimeFeedProvider?.Invoke();
         return feed is null
-            ? ControllerRuntimeFeedResult.Rejected(ControllerManagementResponseBuilder.Unsupported)
+            ? ControllerRuntimeFeedResult.Rejected(ControllerManagementResponseBuilder.Unsupported(reason: "runtime_state_feed_unavailable", message: "This host does not provide a service runtime state feed."))
             : ControllerRuntimeFeedResult.Opened(feed.Subscribe());
     }
 
     private async ValueTask<ControllerManagementResponse> ReadServiceRuntimeAsync(ControllerManagementRequest request, Guid serviceId, CancellationToken cancellationToken)
     {
-        if (!RequireNoIfMatch(request) || !RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
-        if (_bridge is not IExtensionHostBridge13 bridge13 || !ExtensionHostApiSupport.IsApi13Supported(bridge13.ApiVersion)) return ControllerManagementResponseBuilder.Unsupported;
+        if (ValidateNoBodyRequest(request) is { } validationError) return validationError;
+        if (_bridge is not IExtensionHostBridge13 bridge13 || !ExtensionHostApiSupport.IsApi13Supported(bridge13.ApiVersion)) return ControllerManagementResponseBuilder.Unsupported(reason: "host_api_unsupported", message: "This host does not support service runtime snapshots.");
         var read = await bridge13.Supervisor.GetAsync(serviceId, cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
         return read.Value is { } snapshot
             ? ControllerManagementResponseBuilder.SuccessUnversioned(ControllerContractMapper.ToRead(snapshot))
-            : ControllerManagementResponseBuilder.NotFound;
+            : ControllerManagementResponseBuilder.NotFound(reason: "unknown_service", message: $"Service '{serviceId}' was not found.", parameter: serviceId.ToString());
     }
 
     private async ValueTask<ControllerManagementResponse> WriteServiceRuntimeAsync(
@@ -67,11 +67,11 @@ internal sealed partial class ControllerManagementCore
         string action,
         CancellationToken cancellationToken)
     {
-        if (method != "POST") return ControllerManagementResponseBuilder.MethodNotAllowed;
-        if (!RequireNoIfMatch(request) || !RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
+        if (method != "POST") return ControllerManagementResponseBuilder.MethodNotAllowed(message: $"The {method} method is not allowed for this service runtime action.", parameter: method);
+        if (ValidateNoBodyRequest(request) is { } validationError) return validationError;
         if (_bridge is not IExtensionHostBridge13 bridge13 || !ExtensionHostApiSupport.IsApi133Supported(bridge13.ApiVersion))
         {
-            return ControllerManagementResponseBuilder.Unsupported;
+            return ControllerManagementResponseBuilder.Unsupported(reason: "host_api_unsupported", message: "This host does not support service runtime actions.");
         }
 
         var write = action == "resume"
@@ -107,21 +107,23 @@ internal sealed partial class ControllerManagementCore
 
     private async ValueTask<ControllerManagementResponse> ReadServiceAsync(ControllerManagementRequest request, Guid serviceId, CancellationToken cancellationToken)
     {
-        if (!RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
+        if (!RequireEmptyBody(request)) return UnexpectedBodyResponse();
         var read = await ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
         var service = snapshot.Services.FirstOrDefault(candidate => candidate.Id == serviceId);
-        return service is null ? ControllerManagementResponseBuilder.NotFound : ControllerManagementResponseBuilder.Success(ControllerContractMapper.ToRead(service), snapshot.Version);
+        return service is null
+            ? ControllerManagementResponseBuilder.NotFound(reason: "unknown_service", message: $"Service '{serviceId}' was not found.", parameter: serviceId.ToString())
+            : ControllerManagementResponseBuilder.Success(ControllerContractMapper.ToRead(service), snapshot.Version);
     }
 
     private async ValueTask<ControllerManagementResponse> CreateServiceAsync(ControllerManagementRequest request, CancellationToken cancellationToken)
     {
         if (!TryReadIfMatch(request, out var expectedVersion, out var precondition)) return precondition!;
-        if (!HasJsonBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
-        if (!ControllerManagementJson.TryDeserialize<ControllerServiceWriteDto>(ControllerManagementJson.AsReadOnlyMemory(request.Body), out var payload) || payload is null) return ControllerManagementResponseBuilder.InvalidRequest;
+        if (ValidateJsonBody(request) is { } bodyError) return bodyError;
+        if (!ControllerManagementJson.TryDeserialize<ControllerServiceWriteDto>(ControllerManagementJson.AsReadOnlyMemory(request.Body), out var payload) || payload is null) return InvalidJsonBodyResponse(request.Body, "service");
         var read = await ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
-        if (expectedVersion != snapshot.Version) return ControllerManagementResponseBuilder.PreconditionFailed;
+        if (expectedVersion != snapshot.Version) return ControllerManagementResponseBuilder.PreconditionFailed(reason: "if_match_stale", message: $"The If-Match version {expectedVersion} is stale; the current configuration version is {snapshot.Version}.", parameter: "If-Match");
         var service = ControllerContractMapper.ToContract(payload, current: null, createId: Guid.CreateVersion7());
         var write = await ReplaceAsync(expectedVersion, NewChanges(snapshot, services: snapshot.Services.Add(service)), cancellationToken).ConfigureAwait(false);
         return write.IsSuccess ? ControllerManagementResponseBuilder.Success(ControllerContractMapper.ToRead(service), write.NewVersion!.Value, 201, $"{ControllerManagementApiContract.ServicesPath}/{service.Id}") : ControllerManagementResponseBuilder.FromConfigurationErrors(write.Errors);
@@ -130,13 +132,14 @@ internal sealed partial class ControllerManagementCore
     private async ValueTask<ControllerManagementResponse> PatchServiceAsync(ControllerManagementRequest request, Guid serviceId, CancellationToken cancellationToken)
     {
         if (!TryReadIfMatch(request, out var expectedVersion, out var precondition)) return precondition!;
-        if (!HasJsonBody(request, mergePatch: true)) return ControllerManagementResponseBuilder.InvalidRequest;
-        if (PatchContainsProperty(request.Body, "environment")) return ControllerManagementResponseBuilder.InvalidRequest;
+        if (ValidateJsonBody(request, mergePatch: true) is { } bodyError) return bodyError;
+        if (PatchContainsProperty(request.Body, "environment")) return ControllerManagementResponseBuilder.InvalidRequest("invalid_field", "The 'environment' field cannot be changed through this service merge-patch endpoint.", "environment");
         var read = await ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
+        if (expectedVersion != snapshot.Version) return ControllerManagementResponseBuilder.PreconditionFailed(reason: "if_match_stale", message: $"The If-Match version {expectedVersion} is stale; the current configuration version is {snapshot.Version}.", parameter: "If-Match");
         var current = snapshot.Services.FirstOrDefault(service => service.Id == serviceId);
-        if (current is null) return ControllerManagementResponseBuilder.NotFound;
-        if (!TryMergePatch(ControllerContractMapper.ToWrite(current, includeEnvironment: false), ControllerManagementJson.AsReadOnlyMemory(request.Body), out ControllerServiceWriteDto? payload) || payload is null) return ControllerManagementResponseBuilder.InvalidRequest;
+        if (current is null) return ControllerManagementResponseBuilder.NotFound(reason: "unknown_service", message: $"Service '{serviceId}' was not found.", parameter: serviceId.ToString());
+        if (!TryMergePatch(ControllerContractMapper.ToWrite(current, includeEnvironment: false), ControllerManagementJson.AsReadOnlyMemory(request.Body), out ControllerServiceWriteDto? payload) || payload is null) return InvalidMergePatchResponse(request.Body, "service");
         var service = ControllerContractMapper.ToContract(payload, current);
         var write = await ReplaceAsync(expectedVersion, NewChanges(snapshot, services: snapshot.Services.Select(item => item.Id == serviceId ? service : item).ToImmutableArray()), cancellationToken).ConfigureAwait(false);
         return write.IsSuccess ? ControllerManagementResponseBuilder.Success(ControllerContractMapper.ToRead(service), write.NewVersion!.Value) : ControllerManagementResponseBuilder.FromConfigurationErrors(write.Errors);
@@ -145,35 +148,36 @@ internal sealed partial class ControllerManagementCore
     private async ValueTask<ControllerManagementResponse> DeleteServiceAsync(ControllerManagementRequest request, Guid serviceId, CancellationToken cancellationToken)
     {
         if (!TryReadIfMatch(request, out var expectedVersion, out var precondition)) return precondition!;
-        if (!RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
+        if (!RequireEmptyBody(request)) return UnexpectedBodyResponse();
         var read = await ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
-        if (expectedVersion != snapshot.Version) return ControllerManagementResponseBuilder.PreconditionFailed;
+        if (expectedVersion != snapshot.Version) return ControllerManagementResponseBuilder.PreconditionFailed(reason: "if_match_stale", message: $"The If-Match version {expectedVersion} is stale; the current configuration version is {snapshot.Version}.", parameter: "If-Match");
         var service = snapshot.Services.FirstOrDefault(candidate => candidate.Id == serviceId);
-        if (service is null) return ControllerManagementResponseBuilder.NotFound;
+        if (service is null) return ControllerManagementResponseBuilder.NotFound(reason: "unknown_service", message: $"Service '{serviceId}' was not found.", parameter: serviceId.ToString());
         var write = await ReplaceAsync(expectedVersion, NewChanges(snapshot, services: snapshot.Services.Remove(service)), cancellationToken).ConfigureAwait(false);
         return write.IsSuccess ? ControllerManagementResponseBuilder.NoContent(write.NewVersion!.Value) : ControllerManagementResponseBuilder.FromConfigurationErrors(write.Errors);
     }
 
     private async ValueTask<ControllerManagementResponse> ReadEnvironmentAsync(ControllerManagementRequest request, Guid serviceId, CancellationToken cancellationToken)
     {
-        if (!RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
+        if (!RequireEmptyBody(request)) return UnexpectedBodyResponse();
         var read = await ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
         var service = snapshot.Services.FirstOrDefault(candidate => candidate.Id == serviceId);
-        return service is null ? ControllerManagementResponseBuilder.NotFound : ControllerManagementResponseBuilder.Success(ControllerContractMapper.ToEnvironment(service), snapshot.Version);
+        return service is null ? ControllerManagementResponseBuilder.NotFound(reason: "unknown_service", message: $"Service '{serviceId}' was not found.", parameter: serviceId.ToString()) : ControllerManagementResponseBuilder.Success(ControllerContractMapper.ToEnvironment(service), snapshot.Version);
     }
 
     private async ValueTask<ControllerManagementResponse> PutEnvironmentAsync(ControllerManagementRequest request, Guid serviceId, CancellationToken cancellationToken)
     {
         if (!TryReadIfMatch(request, out var expectedVersion, out var precondition)) return precondition!;
-        if (!HasJsonBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
-        if (!ControllerManagementJson.TryDeserialize<ControllerServiceEnvironmentWriteDto>(ControllerManagementJson.AsReadOnlyMemory(request.Body), out var payload) || payload?.Environment is null) return ControllerManagementResponseBuilder.InvalidRequest;
+        if (ValidateJsonBody(request) is { } bodyError) return bodyError;
+        if (!ControllerManagementJson.TryDeserialize<ControllerServiceEnvironmentWriteDto>(ControllerManagementJson.AsReadOnlyMemory(request.Body), out var payload) || payload is null) return InvalidJsonBodyResponse(request.Body, "service environment");
+        if (payload.Environment is null) return MissingFieldResponse("environment");
         var read = await ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
-        if (expectedVersion != snapshot.Version) return ControllerManagementResponseBuilder.PreconditionFailed;
+        if (expectedVersion != snapshot.Version) return ControllerManagementResponseBuilder.PreconditionFailed(reason: "if_match_stale", message: $"The If-Match version {expectedVersion} is stale; the current configuration version is {snapshot.Version}.", parameter: "If-Match");
         var current = snapshot.Services.FirstOrDefault(service => service.Id == serviceId);
-        if (current is null) return ControllerManagementResponseBuilder.NotFound;
+        if (current is null) return ControllerManagementResponseBuilder.NotFound(reason: "unknown_service", message: $"Service '{serviceId}' was not found.", parameter: serviceId.ToString());
         var writeDto = ControllerContractMapper.ToWrite(current, includeEnvironment: true);
         writeDto = new ControllerServiceWriteDto { Enabled = writeDto.Enabled, FileName = writeDto.FileName, ArgumentList = writeDto.ArgumentList, WorkingDirectory = writeDto.WorkingDirectory, Environment = payload.Environment, StartMode = writeDto.StartMode, RestartPolicy = writeDto.RestartPolicy, HealthCheck = writeDto.HealthCheck };
         var service = ControllerContractMapper.ToContract(writeDto, current);
@@ -184,12 +188,12 @@ internal sealed partial class ControllerManagementCore
     private async ValueTask<ControllerManagementResponse> DeleteEnvironmentAsync(ControllerManagementRequest request, Guid serviceId, CancellationToken cancellationToken)
     {
         if (!TryReadIfMatch(request, out var expectedVersion, out var precondition)) return precondition!;
-        if (!RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
+        if (!RequireEmptyBody(request)) return UnexpectedBodyResponse();
         var read = await ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
-        if (expectedVersion != snapshot.Version) return ControllerManagementResponseBuilder.PreconditionFailed;
+        if (expectedVersion != snapshot.Version) return ControllerManagementResponseBuilder.PreconditionFailed(reason: "if_match_stale", message: $"The If-Match version {expectedVersion} is stale; the current configuration version is {snapshot.Version}.", parameter: "If-Match");
         var current = snapshot.Services.FirstOrDefault(service => service.Id == serviceId);
-        if (current is null) return ControllerManagementResponseBuilder.NotFound;
+        if (current is null) return ControllerManagementResponseBuilder.NotFound(reason: "unknown_service", message: $"Service '{serviceId}' was not found.", parameter: serviceId.ToString());
         var writeDto = ControllerContractMapper.ToWrite(current, includeEnvironment: true);
         writeDto = new ControllerServiceWriteDto { Enabled = writeDto.Enabled, FileName = writeDto.FileName, ArgumentList = writeDto.ArgumentList, WorkingDirectory = writeDto.WorkingDirectory, Environment = ImmutableDictionary<string, string>.Empty, StartMode = writeDto.StartMode, RestartPolicy = writeDto.RestartPolicy, HealthCheck = writeDto.HealthCheck };
         var service = ControllerContractMapper.ToContract(writeDto, current);

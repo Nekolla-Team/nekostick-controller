@@ -95,5 +95,7 @@ public sealed class AdmissionTests(ControllerApiFixture fixture) : IClassFixture
         Assert.Equal(ControllerManagementApiContract.Version, envelope.GetProperty("apiVersion").GetInt32());
         Assert.False(envelope.GetProperty("ok").GetBoolean());
         Assert.Equal(code, envelope.GetProperty("code").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(envelope.GetProperty("details").GetProperty("reason").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(envelope.GetProperty("message").GetString()));
     }
 }

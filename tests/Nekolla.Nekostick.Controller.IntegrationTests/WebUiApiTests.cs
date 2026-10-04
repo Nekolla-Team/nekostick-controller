@@ -483,6 +483,8 @@ public sealed class ControllerWebUiHostRouteTests(ControllerApiFixture fixture, 
                 Assert.Equal(404, missingAssetResponse.StatusCode);
                 using var missingDocument = JsonDocument.Parse(missingAssetResponse.BodyStream);
                 Assert.Equal("not_found", missingDocument.RootElement.GetProperty("code").GetString());
+                Assert.False(string.IsNullOrWhiteSpace(missingDocument.RootElement.GetProperty("details").GetProperty("reason").GetString()));
+                Assert.False(string.IsNullOrWhiteSpace(missingDocument.RootElement.GetProperty("message").GetString()));
             }
 
             var legacyResponse = await handler.HandleStreamingAsync(
@@ -497,6 +499,8 @@ public sealed class ControllerWebUiHostRouteTests(ControllerApiFixture fixture, 
                 Assert.Equal(404, legacyResponse.StatusCode);
                 using var legacyDocument = JsonDocument.Parse(legacyResponse.BodyStream);
                 Assert.Equal("not_found", legacyDocument.RootElement.GetProperty("code").GetString());
+                Assert.False(string.IsNullOrWhiteSpace(legacyDocument.RootElement.GetProperty("details").GetProperty("reason").GetString()));
+                Assert.False(string.IsNullOrWhiteSpace(legacyDocument.RootElement.GetProperty("message").GetString()));
             }
             var managementResponse = await handler.HandleStreamingAsync(
                 new ExtensionStreamingRequest(

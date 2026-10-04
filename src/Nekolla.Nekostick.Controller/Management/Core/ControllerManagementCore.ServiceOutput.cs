@@ -19,18 +19,17 @@ internal sealed partial class ControllerManagementCore
         cancellationToken.ThrowIfCancellationRequested();
         if (_bridge is null)
         {
-            return ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.Unavailable);
+            return ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.Unavailable(reason: "bridge_unavailable", message: "The host management bridge is unavailable."));
         }
 
         if (!HasFullConfigurationScope() || !ExtensionHostApiSupport.IsApi13Supported(_bridge.ApiVersion))
         {
-            return ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.Unsupported);
+            return ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.Unsupported(reason: "host_api_unsupported", message: "The host does not support service output streaming."));
         }
 
-        if (_bridge is not IExtensionHostBridge14 bridge14 ||
-            !ExtensionHostApiSupport.IsApi14Supported(bridge14.ApiVersion))
+        if (_bridge is not IExtensionHostBridge14 bridge14 || !ExtensionHostApiSupport.IsApi14Supported(bridge14.ApiVersion))
         {
-            return ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.Unsupported);
+            return ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.Unsupported(reason: "host_api_unsupported", message: "The host does not support service output streaming."));
         }
 
         try
@@ -46,13 +45,10 @@ internal sealed partial class ControllerManagementCore
 
             return result.Code switch
             {
-                ExtensionServiceOutputCode.NotFound => ControllerServiceOutputStreamResult.Rejected(
-                    ControllerManagementResponseBuilder.NotFound),
-                ExtensionServiceOutputCode.NotRunning => ControllerServiceOutputStreamResult.Rejected(
-                    ControllerManagementResponseBuilder.ServiceNotRunning),
-                ExtensionServiceOutputCode.Unsupported => ControllerServiceOutputStreamResult.Rejected(
-                    ControllerManagementResponseBuilder.Unsupported),
-                _ => ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.Unavailable)
+                ExtensionServiceOutputCode.NotFound => ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.NotFound(reason: "unknown_service", message: $"Service '{serviceId}' was not found.", parameter: serviceId.ToString())),
+                ExtensionServiceOutputCode.NotRunning => ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.ServiceNotRunning(reason: "not_running", message: $"Service '{serviceId}' is not running and has no live output to stream.", parameter: serviceId.ToString())),
+                ExtensionServiceOutputCode.Unsupported => ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.Unsupported(reason: "operation_not_supported", message: "The host does not support the requested service output stream.")),
+                _ => ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.Unavailable(reason: "stream_open_failed", message: $"The host could not open a service output stream for service '{serviceId}'.", parameter: serviceId.ToString()))
             };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -61,12 +57,11 @@ internal sealed partial class ControllerManagementCore
         }
         catch (NotSupportedException)
         {
-            return ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.Unsupported);
+            return ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.Unsupported(reason: "host_api_unsupported", message: "The host does not support the requested service output stream."));
         }
         catch (Exception exception)
         {
-            LogDispatchFailure("GET", $"service {serviceId} output stream", exception);
-            return ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.Unavailable);
+            return ControllerServiceOutputStreamResult.Rejected(UnexpectedFailure("GET", $"service {serviceId} output stream", exception));
         }
     }
 
@@ -84,19 +79,17 @@ internal sealed partial class ControllerManagementCore
         cancellationToken.ThrowIfCancellationRequested();
         if (_bridge is null)
         {
-            return ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.Unavailable);
+            return ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.Unavailable(reason: "bridge_unavailable", message: "The host management bridge is unavailable."));
         }
 
         if (!HasFullConfigurationScope() || !ExtensionHostApiSupport.IsApi13Supported(_bridge.ApiVersion))
         {
-            return ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.Unsupported);
+            return ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.Unsupported(reason: "host_api_unsupported", message: "The host does not support service log feeds."));
         }
 
-        if (_bridge is not IExtensionHostBridge14 bridge14 ||
-            !ExtensionHostApiSupport.IsApi14Supported(bridge14.ApiVersion) ||
-            !ExtensionHostApiSupport.ServiceLogFeedAvailable)
+        if (_bridge is not IExtensionHostBridge14 bridge14 || !ExtensionHostApiSupport.IsApi14Supported(bridge14.ApiVersion) || !ExtensionHostApiSupport.ServiceLogFeedAvailable)
         {
-            return ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.Unsupported);
+            return ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.Unsupported(reason: "host_api_unsupported", message: "The host does not support service log feeds."));
         }
 
         try
@@ -110,12 +103,11 @@ internal sealed partial class ControllerManagementCore
         }
         catch (NotSupportedException)
         {
-            return ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.Unsupported);
+            return ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.Unsupported(reason: "host_api_unsupported", message: "The host does not support the requested service log feed."));
         }
         catch (Exception exception)
         {
-            LogDispatchFailure("GET", $"service {serviceId} log feed", exception);
-            return ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.Unavailable);
+            return ControllerServiceLogFeedResult.Rejected(UnexpectedFailure("GET", $"service {serviceId} log feed", exception));
         }
     }
 
@@ -135,13 +127,10 @@ internal sealed partial class ControllerManagementCore
         {
             return result.Code switch
             {
-                ExtensionServiceLogCode.NotFound => ControllerServiceLogFeedResult.Rejected(
-                    ControllerManagementResponseBuilder.NotFound),
-                ExtensionServiceLogCode.InvalidArgument or ExtensionServiceLogCode.InvalidCursor =>
-                    ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.InvalidRequest),
-                ExtensionServiceLogCode.Unsupported => ControllerServiceLogFeedResult.Rejected(
-                    ControllerManagementResponseBuilder.Unsupported),
-                _ => ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.Unavailable)
+                ExtensionServiceLogCode.NotFound => ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.NotFound(reason: "unknown_service", message: $"Service '{serviceId}' was not found.", parameter: serviceId.ToString())),
+                ExtensionServiceLogCode.InvalidArgument or ExtensionServiceLogCode.InvalidCursor => ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.InvalidRequest("invalid_argument", "The 'sinceSequence' parameter must be a non-negative log sequence number.", "sinceSequence")),
+                ExtensionServiceLogCode.Unsupported => ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.Unsupported(reason: "operation_not_supported", message: "The host does not support the requested service log feed.")),
+                _ => ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.Unavailable(reason: "stream_open_failed", message: $"The host could not open a service log feed for service '{serviceId}'.", parameter: serviceId.ToString()))
             };
         }
 

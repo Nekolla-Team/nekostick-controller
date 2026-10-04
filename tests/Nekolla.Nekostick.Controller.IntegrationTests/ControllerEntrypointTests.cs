@@ -444,17 +444,46 @@ public sealed class ControllerEntrypointTests
         var apiKey = ReadBootstrapApiKey(host);
         host.FailReads(new InvalidOperationException("store offline"));
 
-        // Dispatch failures: every failure is answered 503, but a polling client must not flood the log.
-        Assert.Equal(503, (await InvokeHandlerAsync(handler, apiKey, "GET", ControllerManagementApiContract.RoutesPath, cancellationToken: cancellationToken)).StatusCode);
-        Assert.Equal(503, (await InvokeHandlerAsync(handler, apiKey, "GET", ControllerManagementApiContract.RoutesPath, cancellationToken: cancellationToken)).StatusCode);
-        Assert.Single(host.LogEntries, entry =>
-            entry.Level == ExtensionLogLevel.Warning && entry.Text.Contains(ControllerManagementApiContract.RoutesPath, StringComparison.Ordinal));
+        // Unexpected failures must return trace IDs that identify their warning log entries.
+        var routeResponses = new[]
+        {
+            await InvokeHandlerAsync(handler, apiKey, "GET", ControllerManagementApiContract.RoutesPath, cancellationToken: cancellationToken),
+            await InvokeHandlerAsync(handler, apiKey, "GET", ControllerManagementApiContract.RoutesPath, cancellationToken: cancellationToken)
+        };
+        Assert.All(routeResponses, response => Assert.Equal(503, response.StatusCode));
+        var routeTraceIds = routeResponses.Select(ReadTraceId).ToArray();
+        var routeLogs = host.LogEntries.Where(entry =>
+            entry.Level == ExtensionLogLevel.Warning && entry.Text.Contains(ControllerManagementApiContract.RoutesPath, StringComparison.Ordinal)).ToArray();
+        Assert.Equal(routeTraceIds.Distinct(StringComparer.Ordinal).Count(), routeLogs.Length);
+        foreach (var traceId in routeTraceIds.Distinct(StringComparer.Ordinal))
+        {
+            Assert.Contains(routeLogs, entry => entry.Text.Contains($"traceId={traceId}", StringComparison.Ordinal));
+        }
 
-        // The state endpoint fails through the runtime's own snapshot read and logs separately, once.
-        Assert.Equal(503, (await InvokeHandlerAsync(handler, apiKey, "GET", ControllerManagementApiContract.StatePath, cancellationToken: cancellationToken)).StatusCode);
-        Assert.Equal(503, (await InvokeHandlerAsync(handler, apiKey, "GET", ControllerManagementApiContract.StatePath, cancellationToken: cancellationToken)).StatusCode);
-        Assert.Single(host.LogEntries, entry =>
-            entry.Level == ExtensionLogLevel.Warning && entry.Text.Contains("state endpoint", StringComparison.Ordinal));
+        var stateResponses = new[]
+        {
+            await InvokeHandlerAsync(handler, apiKey, "GET", ControllerManagementApiContract.StatePath, cancellationToken: cancellationToken),
+            await InvokeHandlerAsync(handler, apiKey, "GET", ControllerManagementApiContract.StatePath, cancellationToken: cancellationToken)
+        };
+        Assert.All(stateResponses, response => Assert.Equal(503, response.StatusCode));
+        var stateTraceIds = stateResponses.Select(ReadTraceId).ToArray();
+        var stateLogs = host.LogEntries.Where(entry =>
+            entry.Level == ExtensionLogLevel.Warning && entry.Text.Contains(ControllerManagementApiContract.StatePath, StringComparison.Ordinal)).ToArray();
+        Assert.Equal(stateTraceIds.Distinct(StringComparer.Ordinal).Count(), stateLogs.Length);
+        foreach (var traceId in stateTraceIds.Distinct(StringComparer.Ordinal))
+        {
+            Assert.Contains(stateLogs, entry => entry.Text.Contains($"traceId={traceId}", StringComparison.Ordinal));
+        }
+
+        static string ReadTraceId(ExtensionHandlerResponse response)
+        {
+            using var document = JsonDocument.Parse(response.Body.ToArray());
+            var details = document.RootElement.GetProperty("details");
+            Assert.Equal("unexpected_exception", details.GetProperty("reason").GetString());
+            var traceId = details.GetProperty("traceId").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(traceId));
+            return traceId!;
+        }
 
         await entrypoint.StopAsync(cancellationToken);
     }

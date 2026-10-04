@@ -189,5 +189,7 @@ public sealed class RoutesApiTests(ControllerApiFixture fixture) : IClassFixture
         Assert.Equal(1, envelope.GetProperty("apiVersion").GetInt32());
         Assert.False(envelope.GetProperty("ok").GetBoolean());
         Assert.Equal(code, envelope.GetProperty("code").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(envelope.GetProperty("details").GetProperty("reason").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(envelope.GetProperty("message").GetString()));
     }
 }

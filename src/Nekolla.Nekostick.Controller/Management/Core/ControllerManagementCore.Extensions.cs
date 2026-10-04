@@ -10,8 +10,8 @@ internal sealed partial class ControllerManagementCore
 
     private async ValueTask<ControllerManagementResponse> ReadExtensionsAsync(ControllerManagementRequest request, CancellationToken cancellationToken)
     {
-        if (!RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
-        if (ExtensionManagement is not { } management) return ControllerManagementResponseBuilder.Unsupported;
+        if (!RequireEmptyBody(request)) return UnexpectedBodyResponse();
+        if (ExtensionManagement is not { } management) return ControllerManagementResponseBuilder.Unsupported(reason: "extension_management_unavailable", message: "The host does not provide the extension management API.");
         var read = await management.ListAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
         var records = read.Value.Select(MapExtensionEntry).ToImmutableArray();
@@ -20,12 +20,12 @@ internal sealed partial class ControllerManagementCore
 
     private async ValueTask<ControllerManagementResponse> ReadExtensionAsync(ControllerManagementRequest request, string extensionId, CancellationToken cancellationToken)
     {
-        if (!RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
-        if (ExtensionManagement is not { } management) return ControllerManagementResponseBuilder.Unsupported;
+        if (!RequireEmptyBody(request)) return UnexpectedBodyResponse();
+        if (ExtensionManagement is not { } management) return ControllerManagementResponseBuilder.Unsupported(reason: "extension_management_unavailable", message: "The host does not provide the extension management API.");
         var read = await management.ListAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
         var extension = read.Value.FirstOrDefault(entry => string.Equals(entry.ExtensionId, extensionId, StringComparison.Ordinal));
-        if (extension is null) return ControllerManagementResponseBuilder.NotFound;
+        if (extension is null) return ControllerManagementResponseBuilder.NotFound(reason: "unknown_extension", message: $"Extension '{extensionId}' was not found.", parameter: extensionId);
         var mapped = MapExtensionEntry(extension);
         return ControllerManagementResponseBuilder.SuccessUnversioned(mapped);
     }
@@ -41,8 +41,8 @@ internal sealed partial class ControllerManagementCore
 
     private async ValueTask<ControllerManagementResponse> RefreshExtensionsAsync(ControllerManagementRequest request, CancellationToken cancellationToken)
     {
-        if (!RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
-        if (ExtensionManagement is not { } management) return ControllerManagementResponseBuilder.Unsupported;
+        if (!RequireEmptyBody(request)) return UnexpectedBodyResponse();
+        if (ExtensionManagement is not { } management) return ControllerManagementResponseBuilder.Unsupported(reason: "extension_management_unavailable", message: "The host does not provide the extension management API.");
         var read = await management.RequestRefreshAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } summary) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
         var mapped = _bridge is IExtensionHostBridge13 bridge13 && ExtensionHostApiSupport.IsApi134Supported(bridge13.ApiVersion)
@@ -58,15 +58,24 @@ internal sealed partial class ControllerManagementCore
         {
             return result.Outcome switch
             {
-                ControllerExtensionInstallOutcome.InvalidPackage => result.Reason is { } invalidReason
-                    ? ControllerManagementResponseBuilder.InvalidRequestWithReason(invalidReason)
-                    : ControllerManagementResponseBuilder.InvalidRequest,
-                ControllerExtensionInstallOutcome.DowngradeForbidden => result.Reason is { } downgradeReason
-                    ? ControllerManagementResponseBuilder.DowngradeForbiddenWithReason(downgradeReason)
-                    : ControllerManagementResponseBuilder.DowngradeForbidden,
+                ControllerExtensionInstallOutcome.InvalidPackage => ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                    result.ErrorReason ?? "invalid_package",
+                    result.Reason ?? "The uploaded extension package is invalid.",
+                    "package"),
+                ControllerExtensionInstallOutcome.DowngradeForbidden => result.Reason is { } downgradeMessage
+                    ? ControllerManagementResponseBuilder.DowngradeForbiddenWithReason("downgrade_forbidden", downgradeMessage, "package.version")
+                    : ControllerManagementResponseBuilder.DowngradeForbidden(reason: "downgrade_forbidden", message: "The uploaded package version is older than the installed extension version.", parameter: "package.version"),
                 _ => result.RestoreSucceeded is { } restored
-                    ? ControllerManagementResponseBuilder.StorageUnavailableWithRestore(restored)
-                    : ControllerManagementResponseBuilder.StorageUnavailable
+                    ? ControllerManagementResponseBuilder.StorageUnavailableWithRestore(
+                        restored,
+                        reason: result.ErrorReason,
+                        parameter: "package",
+                        traceId: result.TraceId)
+                    : ControllerManagementResponseBuilder.StorageUnavailable(
+                        reason: result.ErrorReason ?? "storage_io_failure",
+                        message: "The extension package could not be installed because configuration storage is unavailable.",
+                        parameter: "package",
+                        traceId: result.TraceId)
             };
         }
 
@@ -81,9 +90,9 @@ internal sealed partial class ControllerManagementCore
     private async ValueTask<ControllerManagementResponse> WriteExtensionLifecycleAsync(ControllerManagementRequest request, string method, string extensionId, string action, CancellationToken cancellationToken)
     {
         var expectedMethod = action == "record" ? "DELETE" : "POST";
-        if (method != expectedMethod) return ControllerManagementResponseBuilder.MethodNotAllowed;
-        if (!RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
-        if (ExtensionManagement is not { } management) return ControllerManagementResponseBuilder.Unsupported;
+        if (method != expectedMethod) return ControllerManagementResponseBuilder.MethodNotAllowed(message: $"The {method} method is not allowed for the '{action}' extension action.", parameter: method);
+        if (!RequireEmptyBody(request)) return UnexpectedBodyResponse();
+        if (ExtensionManagement is not { } management) return ControllerManagementResponseBuilder.Unsupported(reason: "extension_management_unavailable", message: "The host does not provide the extension management API.");
         if (action == "disable" &&
             _options.PreventSelfDisable &&
             string.Equals(extensionId, ControllerOptions.ExtensionId, StringComparison.Ordinal))
@@ -91,7 +100,9 @@ internal sealed partial class ControllerManagementCore
             // Self-disable takes the management API offline until someone flips the record back on
             // the Host side; the operator opted into rejecting it via preventSelfDisable.
             return ControllerManagementResponseBuilder.InvalidRequestWithReason(
-                "The controller settings forbid disabling the controller extension itself.");
+                "self_disable_forbidden",
+                "Disabling the controller extension is forbidden while preventSelfDisable is enabled.",
+                "preventSelfDisable");
         }
 
         if (action == "reload") return await ReloadExtensionAsync(request, management, extensionId, cancellationToken).ConfigureAwait(false);
@@ -124,11 +135,10 @@ internal sealed partial class ControllerManagementCore
         var read = await management.ListAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
         var entry = read.Value.FirstOrDefault(candidate => string.Equals(candidate.ExtensionId, extensionId, StringComparison.Ordinal));
-        if (entry is null) return ControllerManagementResponseBuilder.NotFound;
-        if (entry.LoadState != ExtensionLoadState.Loaded) return ControllerManagementResponseBuilder.InvalidRequest;
-        return management.ReloadSoon(extensionId)
-            ? ControllerManagementResponseBuilder.SuccessUnversioned(new ControllerExtensionReloadReadDto { Outcome = "scheduled" })
-            : ControllerManagementResponseBuilder.Unsupported;
+        if (entry is null) return ControllerManagementResponseBuilder.NotFound(reason: "unknown_extension", message: $"Extension '{extensionId}' was not found.", parameter: extensionId);
+        if (entry.LoadState != ExtensionLoadState.Loaded) return ControllerManagementResponseBuilder.InvalidRequest("extension_not_loaded", "The extension must be loaded before it can be reloaded.", "extensionId");
+        if (management.ReloadSoon(extensionId)) return ControllerManagementResponseBuilder.SuccessUnversioned(new ControllerExtensionReloadReadDto { Outcome = "scheduled" });
+        return ControllerManagementResponseBuilder.Unsupported(reason: "reload_not_scheduled", message: $"The host could not schedule a reload for extension '{extensionId}'.", parameter: extensionId);
     }
 
     private static bool TryGetExtensionActionPath(string path, out string extensionId, out string action)
@@ -148,25 +158,24 @@ internal sealed partial class ControllerManagementCore
 
     private async ValueTask<ControllerManagementResponse> ReadExtensionSettingsAsync(ControllerManagementRequest request, string extensionId, CancellationToken cancellationToken)
     {
-        if (!RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
+        if (!RequireEmptyBody(request)) return UnexpectedBodyResponse();
         var read = await ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
-        if (!snapshot.ExtensionRecords.Any(record => string.Equals(record.ExtensionId, extensionId, StringComparison.Ordinal))) return ControllerManagementResponseBuilder.NotFound;
+        if (!snapshot.ExtensionRecords.Any(record => string.Equals(record.ExtensionId, extensionId, StringComparison.Ordinal))) return ControllerManagementResponseBuilder.NotFound(reason: "unknown_extension", message: $"Extension '{extensionId}' was not found.", parameter: extensionId);
         var settings = snapshot.ExtensionSettings.FirstOrDefault(item => string.Equals(item.ExtensionId, extensionId, StringComparison.Ordinal));
-        return settings is null
-            ? ControllerManagementResponseBuilder.SettingsAbsent(snapshot.Version)
-            : ControllerManagementResponseBuilder.Success(ControllerContractMapper.ToRead(settings), snapshot.Version);
+        if (settings is null) return ControllerManagementResponseBuilder.SettingsAbsent(snapshot.Version, message: $"The settings document for extension '{extensionId}' has not been created.", parameter: extensionId);
+        return ControllerManagementResponseBuilder.Success(ControllerContractMapper.ToRead(settings), snapshot.Version);
     }
 
     private async ValueTask<ControllerManagementResponse> PutExtensionSettingsAsync(ControllerManagementRequest request, string extensionId, CancellationToken cancellationToken)
     {
         if (!TryReadIfMatch(request, out var expectedVersion, out var precondition)) return precondition!;
-        if (!HasJsonBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
-        if (!ControllerManagementJson.TryDeserialize<ControllerExtensionSettingsWriteDto>(ControllerManagementJson.AsReadOnlyMemory(request.Body), out var payload) || payload is null) return ControllerManagementResponseBuilder.InvalidRequest;
+        if (ValidateJsonBody(request) is { } bodyError) return bodyError;
+        if (!ControllerManagementJson.TryDeserialize<ControllerExtensionSettingsWriteDto>(ControllerManagementJson.AsReadOnlyMemory(request.Body), out var payload) || payload is null) return InvalidJsonBodyResponse(request.Body, "extension settings");
         var read = await ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
-        if (expectedVersion != snapshot.Version) return ControllerManagementResponseBuilder.PreconditionFailed;
-        if (!snapshot.ExtensionRecords.Any(record => string.Equals(record.ExtensionId, extensionId, StringComparison.Ordinal))) return ControllerManagementResponseBuilder.NotFound;
+        if (expectedVersion != snapshot.Version) return ControllerManagementResponseBuilder.PreconditionFailed(reason: "if_match_stale", message: $"The If-Match version {expectedVersion} is stale; the current configuration version is {snapshot.Version}.", parameter: "If-Match");
+        if (!snapshot.ExtensionRecords.Any(record => string.Equals(record.ExtensionId, extensionId, StringComparison.Ordinal))) return ControllerManagementResponseBuilder.NotFound(reason: "unknown_extension", message: $"Extension '{extensionId}' was not found.", parameter: extensionId);
         var current = snapshot.ExtensionSettings.FirstOrDefault(item => string.Equals(item.ExtensionId, extensionId, StringComparison.Ordinal));
         var settings = ControllerContractMapper.ToContract(payload, extensionId, current?.Version ?? 0);
         var replacement = snapshot.ExtensionSettings.Where(item => !string.Equals(item.ExtensionId, extensionId, StringComparison.Ordinal)).Append(settings).ToImmutableArray();
@@ -177,12 +186,12 @@ internal sealed partial class ControllerManagementCore
     private async ValueTask<ControllerManagementResponse> DeleteExtensionSettingsAsync(ControllerManagementRequest request, string extensionId, CancellationToken cancellationToken)
     {
         if (!TryReadIfMatch(request, out var expectedVersion, out var precondition)) return precondition!;
-        if (!RequireEmptyBody(request)) return ControllerManagementResponseBuilder.InvalidRequest;
+        if (!RequireEmptyBody(request)) return UnexpectedBodyResponse();
         var read = await ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
         if (!read.IsSuccess || read.Value is not { } snapshot) return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
-        if (expectedVersion != snapshot.Version) return ControllerManagementResponseBuilder.PreconditionFailed;
-        if (!snapshot.ExtensionRecords.Any(record => string.Equals(record.ExtensionId, extensionId, StringComparison.Ordinal))) return ControllerManagementResponseBuilder.NotFound;
-        if (!snapshot.ExtensionSettings.Any(item => string.Equals(item.ExtensionId, extensionId, StringComparison.Ordinal))) return ControllerManagementResponseBuilder.NotFound;
+        if (expectedVersion != snapshot.Version) return ControllerManagementResponseBuilder.PreconditionFailed(reason: "if_match_stale", message: $"The If-Match version {expectedVersion} is stale; the current configuration version is {snapshot.Version}.", parameter: "If-Match");
+        if (!snapshot.ExtensionRecords.Any(record => string.Equals(record.ExtensionId, extensionId, StringComparison.Ordinal))) return ControllerManagementResponseBuilder.NotFound(reason: "unknown_extension", message: $"Extension '{extensionId}' was not found.", parameter: extensionId);
+        if (!snapshot.ExtensionSettings.Any(item => string.Equals(item.ExtensionId, extensionId, StringComparison.Ordinal))) return ControllerManagementResponseBuilder.NotFound(reason: "settings_absent", message: $"Settings for extension '{extensionId}' were not found.", parameter: extensionId);
         var replacement = snapshot.ExtensionSettings.Where(item => !string.Equals(item.ExtensionId, extensionId, StringComparison.Ordinal)).ToImmutableArray();
         var write = await ReplaceAsync(expectedVersion, NewChanges(snapshot, extensionSettings: replacement), cancellationToken).ConfigureAwait(false);
         return write.IsSuccess ? ControllerManagementResponseBuilder.NoContent(write.NewVersion!.Value) : ControllerManagementResponseBuilder.FromConfigurationErrors(write.Errors);

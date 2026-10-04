@@ -53,13 +53,76 @@ public sealed class ControllerManagementHandler : IExtensionHandler
         }
 
         var presentedKey = ReadApiKey(request.Headers);
-        if (!ControllerAdmissionLimits.TryCreateRequest(ControllerTransport.HostRoute, request.Method, request.Path, presentedKey,
-            request.Headers.Select(static pair => new KeyValuePair<string, IEnumerable<string>>(pair.Key, pair.Value)), ControllerManagementJson.AsReadOnlyMemory(request.Body), out var managementRequest) || managementRequest is null)
-            return ToExtensionResponse(ControllerManagementResponseBuilder.InvalidRequest, corsOrigin);
+        var body = ControllerManagementJson.AsReadOnlyMemory(request.Body);
+        if (!ControllerAdmissionLimits.TryCreateRequest(
+                ControllerTransport.HostRoute,
+                request.Method,
+                request.Path,
+                presentedKey,
+                request.Headers.Select(static pair => new KeyValuePair<string, IEnumerable<string>>(pair.Key, pair.Value)),
+                body,
+                out var managementRequest) ||
+            managementRequest is null)
+        {
+            return ToExtensionResponse(
+                RequestAdmissionFailure(request.Method, request.Path, presentedKey, body),
+                corsOrigin);
+        }
         var response = await _dispatcher.DispatchAsync(managementRequest, cancellationToken).ConfigureAwait(false);
         return ToExtensionResponse(response, corsOrigin);
     }
 
+    private static ControllerManagementResponse RequestAdmissionFailure(
+        string method,
+        string path,
+        string? apiKey,
+        ReadOnlyMemory<byte> body)
+    {
+        if (string.IsNullOrWhiteSpace(method))
+        {
+            return ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                "missing_method",
+                "The HostRoute method is required.",
+                "method");
+        }
+
+        if (method.Length > 32)
+        {
+            return ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                "invalid_method",
+                "The HostRoute method exceeds the controller's method length limit.",
+                "method");
+        }
+
+        if (string.IsNullOrWhiteSpace(path) || path.Length > 8192)
+        {
+            return ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                "invalid_path",
+                "The HostRoute path is missing or exceeds the controller's path length limit.",
+                "path");
+        }
+
+        if (body.Length > ControllerAdmissionLimits.MaximumRequestBodyBytes)
+        {
+            return ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                "body_too_large",
+                $"The request body exceeds the {ControllerAdmissionLimits.MaximumRequestBodyBytes}-byte limit.",
+                "body");
+        }
+
+        if (apiKey is { Length: > ControllerOptions.MaximumApiKeyLength })
+        {
+            return ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                "api_key_too_large",
+                "The API key header exceeds the maximum supported length.",
+                ControllerManagementApiContract.ApiKeyHeaderName);
+        }
+
+        return ControllerManagementResponseBuilder.InvalidRequestWithReason(
+            "invalid_header",
+            "The HostRoute request headers violate the controller's admission limits.",
+            "headers");
+    }
     /// <summary>Returns the Origin header value when it is allowed, or the wildcard marker.</summary>
     internal static string? MatchAllowedOrigin(ControllerOptions options, IReadOnlyDictionary<string, ImmutableArray<string>> headers)
     {

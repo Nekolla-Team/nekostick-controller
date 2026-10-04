@@ -166,6 +166,8 @@ public sealed class ServiceLogFeedSseApiTests(ControllerApi14Fixture fixture) : 
             response.BodyStream,
             cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("not_running", document.RootElement.GetProperty("code").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty("details").GetProperty("reason").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty("message").GetString()));
         await response.BodyStream.DisposeAsync();
     }
 

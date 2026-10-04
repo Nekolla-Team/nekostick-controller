@@ -61,7 +61,7 @@ public static class ControllerManagementJson
         TrySerialize(response, out var payload) ? payload : ResponseTooLargeBody.ToArray();
 
     private static readonly byte[] ResponseTooLargeEnvelopeBytes = Encoding.UTF8.GetBytes(
-        $"{{\"apiVersion\":{ControllerManagementApiContract.Version},\"ok\":false,\"code\":\"response_too_large\",\"message\":\"The management response is too large.\",\"data\":null,\"version\":null}}");
+        $"{{\"apiVersion\":{ControllerManagementApiContract.Version},\"ok\":false,\"code\":\"response_too_large\",\"message\":\"The management response is too large.\",\"data\":null,\"version\":null,\"details\":{{\"reason\":\"serialization_too_large\"}}}}" );
 
     private static JsonSerializerOptions CreateOptions()
     {

@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.Logging;
 using Nekolla.Nekostick.Contracts;
 using Nekolla.Nekostick.Controller.Adapters.Grpc;
 using Nekolla.Nekostick.Controller.Adapters.HttpUnix;
@@ -98,11 +99,6 @@ internal sealed class ControllerRuntime
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
-        }
-        catch (InvalidOperationException exception)
-        {
-            LogStateReadFailure($"snapshot read threw and the state endpoint will answer 503 unavailable: {exception}");
-            return null;
         }
         catch (NotSupportedException exception)
         {
@@ -414,10 +410,9 @@ internal sealed class ControllerRuntime
     {
         // A replacement start that still waits for the previous generation's resources cannot
         // reconcile listeners yet; fail the settings reload instead of racing the deferred bind.
-        if (!IsStarted || _bridge is null || _resourceAcquisitionPending)
-        {
-            return ControllerManagementResponseBuilder.Unavailable;
-        }
+        if (!IsStarted) return ControllerManagementResponseBuilder.Unavailable(reason: "runtime_not_started", message: "The controller runtime must be started before settings can be reloaded.", parameter: "controller.state");
+        if (_bridge is null) return ControllerManagementResponseBuilder.Unavailable(reason: "bridge_unavailable", message: "A Host configuration bridge is required to reload controller settings.", parameter: "bridge");
+        if (_resourceAcquisitionPending) return ControllerManagementResponseBuilder.Unavailable(reason: "resource_acquisition_pending", message: "Controller resources are still being acquired, so settings cannot be reloaded.", parameter: "resourceAcquisitionPending");
 
         await Dispatcher.MutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -434,10 +429,8 @@ internal sealed class ControllerRuntime
         long expectedVersion,
         CancellationToken cancellationToken)
     {
-        if (!IsStarted || _bridge is null)
-        {
-            return ControllerManagementResponseBuilder.Unavailable;
-        }
+        if (!IsStarted) return ControllerManagementResponseBuilder.Unavailable(reason: "runtime_not_started", message: "The controller runtime must be started before settings can be reloaded.", parameter: "controller.state");
+        if (_bridge is null) return ControllerManagementResponseBuilder.Unavailable(reason: "bridge_unavailable", message: "A Host configuration bridge is required to reload controller settings.", parameter: "bridge");
 
         cancellationToken.ThrowIfCancellationRequested();
         ConfigurationReadResult<HostConfigurationSnapshot> read;
@@ -449,13 +442,24 @@ internal sealed class ControllerRuntime
         {
             throw;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException exception)
         {
-            return ControllerManagementResponseBuilder.Unavailable;
+            var traceId = ControllerManagementCore.CreateTraceId();
+            if (_bridge is IExtensionHostBridge13 { LogWriter: { } logWriter })
+            {
+                logWriter.WriteText(ExtensionLogLevel.Warning, $"Management reload failed; traceId={traceId}; method=POST; path={ControllerManagementApiContract.ReloadSettingsPath}; exceptionType={exception.GetType().FullName ?? exception.GetType().Name}: {exception}");
+            }
+
+            return ControllerManagementResponseBuilder.Error(
+                503,
+                ControllerDispatchCode.Unavailable,
+                "unavailable",
+                $"The Host configuration store could not be read for the settings reload. Use traceId '{traceId}' to find the server log entry.",
+                new ControllerErrorDetails { Reason = "host_config_read_failed", TraceId = traceId });
         }
         catch (NotSupportedException)
         {
-            return ControllerManagementResponseBuilder.Unsupported;
+            return ControllerManagementResponseBuilder.Unsupported(reason: "host_api_unsupported", message: "The Host configuration API does not support the settings reload read.", parameter: "host.configuration");
         }
 
         if (!read.IsSuccess || read.Value is not { } snapshot)
@@ -463,30 +467,27 @@ internal sealed class ControllerRuntime
             return ControllerManagementResponseBuilder.FromConfigurationErrors(read.Errors);
         }
 
-        if (expectedVersion != snapshot.Version)
-        {
-            return ControllerManagementResponseBuilder.PreconditionFailed;
-        }
+        if (expectedVersion != snapshot.Version) return ControllerManagementResponseBuilder.PreconditionFailed(reason: "if_match_stale", message: $"The If-Match version {expectedVersion} is stale; the current configuration version is {snapshot.Version}.", parameter: "If-Match");
 
         var matchingSettings = snapshot.ExtensionSettings
             .Where(static settings => string.Equals(settings.ExtensionId, ControllerOptions.ExtensionId, StringComparison.Ordinal))
             .Take(2)
             .ToArray();
-        if (matchingSettings.Length != 1 || !ControllerOptions.TryParseHostSettings(matchingSettings[0], out var candidate) || candidate is null)
+        if (matchingSettings.Length != 1)
         {
-            return ControllerManagementResponseBuilder.InvalidRequest;
+            return matchingSettings.Length == 0
+                ? ControllerManagementResponseBuilder.InvalidRequest("missing_field", "Controller extension settings are missing.", "extension.settings")
+                : ControllerManagementResponseBuilder.InvalidRequest("duplicate_settings", "Multiple controller extension settings documents are configured.", "extension.settings");
+        }
+        if (!ControllerOptions.TryParseHostSettings(matchingSettings[0], out var candidate) || candidate is null)
+        {
+            return ControllerManagementResponseBuilder.InvalidRequest("invalid_field", "The controller extension settings document is invalid or uses an unsupported schema version.", "extension.settings");
         }
 
         var validation = candidate.Validate();
-        if (!validation.IsValid)
-        {
-            return ControllerManagementResponseBuilder.InvalidRequest;
-        }
+        if (!validation.IsValid) return InvalidSettingsResponse(validation.Error);
 
-        if (IsEphemeralBootstrap && !HasAnyListener(candidate))
-        {
-            return ControllerManagementResponseBuilder.InvalidRequest;
-        }
+        if (IsEphemeralBootstrap && !HasAnyListener(candidate)) return ControllerManagementResponseBuilder.InvalidRequest("listener_required", "An ephemeral bootstrap runtime requires at least one enabled listener.", "listeners");
         var current = Volatile.Read(ref _options);
         var optionsSwapped = false;
         try
@@ -518,7 +519,7 @@ internal sealed class ControllerRuntime
 
             throw;
         }
-        catch
+        catch (Exception exception)
         {
             if (optionsSwapped)
             {
@@ -531,9 +532,35 @@ internal sealed class ControllerRuntime
                 await FailClosedAsync().ConfigureAwait(false);
             }
 
-            return ControllerManagementResponseBuilder.Unavailable;
+            var traceId = ControllerManagementCore.CreateTraceId();
+            if (_bridge is IExtensionHostBridge13 { LogWriter: { } logWriter })
+            {
+                logWriter.WriteText(ExtensionLogLevel.Warning, $"Management reload failed; traceId={traceId}; method=POST; path={ControllerManagementApiContract.ReloadSettingsPath}; exceptionType={exception.GetType().FullName ?? exception.GetType().Name}: {exception}");
+            }
+
+            return ControllerManagementResponseBuilder.Error(503, ControllerDispatchCode.Unavailable, "unavailable", $"The settings reload failed unexpectedly. Use traceId '{traceId}' to find the server log entry.", details: new ControllerErrorDetails { Reason = "unexpected_exception", TraceId = traceId });
         }
     }
+
+    private static ControllerManagementResponse InvalidSettingsResponse(ControllerOptionsError error) => error switch
+    {
+        ControllerOptionsError.NonLocalBinding => ControllerManagementResponseBuilder.InvalidRequest("invalid_value", "The 'loopbackOnly' setting must be enabled for controller management.", "loopbackOnly"),
+        ControllerOptionsError.ApiScopeRequired => ControllerManagementResponseBuilder.InvalidRequest("invalid_value", "The 'apiScope' setting must include FullConfiguration when a management transport is enabled.", "apiScope"),
+        ControllerOptionsError.ApiScopeInvalid => ControllerManagementResponseBuilder.InvalidRequest("invalid_value", "The 'apiScope' setting contains an unsupported capability.", "apiScope"),
+        ControllerOptionsError.ApiKeyRequired => ControllerManagementResponseBuilder.InvalidRequest("missing_field", "The 'apiKey' setting is required for protected management transports.", "apiKey"),
+        ControllerOptionsError.ApiKeyWeak => ControllerManagementResponseBuilder.InvalidRequest("invalid_value", "The 'apiKey' setting does not meet the minimum strength requirement.", "apiKey"),
+        ControllerOptionsError.HttpPortRequired => ControllerManagementResponseBuilder.InvalidRequest("missing_field", "The 'httpPort' setting is required when HTTP JSON is enabled.", "httpPort"),
+        ControllerOptionsError.HttpPortInvalid => ControllerManagementResponseBuilder.InvalidRequest("invalid_value", "The 'httpPort' setting must be in the range 1 through 65535.", "httpPort"),
+        ControllerOptionsError.GrpcPortRequired => ControllerManagementResponseBuilder.InvalidRequest("missing_field", "The 'grpcPort' setting is required when gRPC is enabled.", "grpcPort"),
+        ControllerOptionsError.GrpcPortInvalid => ControllerManagementResponseBuilder.InvalidRequest("invalid_value", "The 'grpcPort' setting must be in the range 1 through 65535.", "grpcPort"),
+        ControllerOptionsError.UnixSocketPathRequired => ControllerManagementResponseBuilder.InvalidRequest("missing_field", "The 'unixSocketPath' setting is required when the Unix socket is enabled.", "unixSocketPath"),
+        ControllerOptionsError.UnixSocketPathInvalid => ControllerManagementResponseBuilder.InvalidRequest("invalid_value", "The 'unixSocketPath' setting must be an absolute local path.", "unixSocketPath"),
+        ControllerOptionsError.HostRoutePathRequired => ControllerManagementResponseBuilder.InvalidRequest("missing_field", "The 'hostRoutePath' setting is required when the Host route is enabled.", "hostRoutePath"),
+        ControllerOptionsError.HostRoutePathInvalid => ControllerManagementResponseBuilder.InvalidRequest("invalid_value", "The 'hostRoutePath' setting must be a canonical absolute management path.", "hostRoutePath"),
+        ControllerOptionsError.UnixSocketModeInvalid => ControllerManagementResponseBuilder.InvalidRequest("invalid_value", "The 'unixSocketMode' setting must allow only owner read/write access.", "unixSocketMode"),
+        ControllerOptionsError.CorsOriginInvalid => ControllerManagementResponseBuilder.InvalidRequest("invalid_value", "Each 'corsAllowedOrigins' entry must be an exact HTTP or HTTPS origin.", "corsAllowedOrigins"),
+        _ => ControllerManagementResponseBuilder.InvalidRequest("invalid_settings", "The controller options contain an invalid value.", "settings")
+    };
 
     private async ValueTask<bool> RecoverAfterReloadFailureAsync(
         ControllerOptions candidate,
@@ -1024,5 +1051,49 @@ internal sealed class ControllerRuntime
 
         _registration = null;
         _handlerId = null;
+    }
+}
+
+internal sealed class ControllerManagementLogProvider(IExtensionHostBridge? bridge) : ILoggerProvider
+{
+    public ILogger CreateLogger(string categoryName) => new ForwardingLogger(bridge, categoryName);
+
+    public void Dispose()
+    {
+    }
+
+    private sealed class ForwardingLogger(IExtensionHostBridge? bridge, string categoryName) : ILogger
+    {
+        private bool IsAdapterCategory =>
+            string.Equals(categoryName, typeof(HttpUnixKestrelAdapter).FullName, StringComparison.Ordinal) ||
+            string.Equals(categoryName, typeof(ControllerManagementGrpcService).FullName, StringComparison.Ordinal);
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) =>
+            logLevel >= LogLevel.Error &&
+            IsAdapterCategory &&
+            bridge is IExtensionHostBridge13 { LogWriter: not null };
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (!IsEnabled(logLevel) || bridge is not IExtensionHostBridge13 { LogWriter: { } logWriter })
+            {
+                return;
+            }
+
+            var message = formatter(state, exception);
+            if (exception is not null)
+            {
+                message = string.Concat(message, Environment.NewLine, exception);
+            }
+
+            logWriter.WriteText(ExtensionLogLevel.Warning, message);
+        }
     }
 }

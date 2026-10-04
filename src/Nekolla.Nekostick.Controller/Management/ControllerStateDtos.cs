@@ -126,4 +126,40 @@ public sealed class ControllerResponseEnvelope
     [JsonPropertyName("data")] public object? Data { get; init; }
     /// <summary>Optional resource or configuration version associated with the response.</summary>
     [JsonPropertyName("version")] public long? Version { get; init; }
+    /// <summary>Precise structured error information, null for success responses.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("details")] public ControllerErrorDetails? Details { get; init; }
+    /// <summary>All field validation errors, null when no field errors are present.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("errors")] public IReadOnlyList<ControllerFieldError>? Errors { get; init; }
+}
+
+/// <summary>Contains the stable machine-readable cause and optional context for an error.</summary>
+public sealed class ControllerErrorDetails
+{
+    /// <summary>Precise stable machine-readable error reason (snake_case).</summary>
+    [JsonPropertyName("reason")] public string Reason { get; init; } = string.Empty;
+    /// <summary>Optional name of the offending parameter, field, or header.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("parameter")] public string? Parameter { get; init; }
+    /// <summary>Optional description of the expected value or shape.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("expected")] public string? Expected { get; init; }
+    /// <summary>Optional description of the actual supplied value.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("actual")] public string? Actual { get; init; }
+    /// <summary>Optional correlation identifier matching the server log entry for this failure.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("traceId")] public string? TraceId { get; init; }
+}
+
+/// <summary>Describes one field-specific validation error.</summary>
+public sealed class ControllerFieldError
+{
+    /// <summary>Name of the offending field, empty when not field-specific.</summary>
+    [JsonPropertyName("field")] public string Field { get; init; } = string.Empty;
+    /// <summary>Precise stable machine-readable reason for this field error.</summary>
+    [JsonPropertyName("reason")] public string Reason { get; init; } = string.Empty;
+    /// <summary>Human-readable description of this field error.</summary>
+    [JsonPropertyName("message")] public string Message { get; init; } = string.Empty;
 }

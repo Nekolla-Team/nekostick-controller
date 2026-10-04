@@ -247,7 +247,7 @@ public sealed class ControllerEntrypoint : IExtensionEntry, IDisposable
         {
             if (!ReferenceEquals(_runtime, runtime) || !runtime.IsStarted)
             {
-                return ControllerManagementResponseBuilder.Unavailable;
+                return ControllerManagementResponseBuilder.Unavailable(reason: "runtime_not_started", message: "The settings reload target is not the active, started controller runtime.", parameter: "runtime");
             }
 
             return await runtime.ReloadAsync(expectedVersion, cancellationToken).ConfigureAwait(false);

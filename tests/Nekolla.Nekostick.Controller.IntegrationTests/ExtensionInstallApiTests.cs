@@ -113,11 +113,7 @@ public sealed class ExtensionInstallApiTests(ControllerApiFixture fixture) : ICl
 
             Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
             using var envelope = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-            Assert.False(envelope.RootElement.GetProperty("ok").GetBoolean());
-            Assert.Equal("downgrade_forbidden", envelope.RootElement.GetProperty("code").GetString());
-            var message = envelope.RootElement.GetProperty("message").GetString();
-            Assert.Contains("2.0.0", message, StringComparison.Ordinal);
-            Assert.Contains("1.9.9", message, StringComparison.Ordinal);
+            AssertErrorEnvelope(envelope.RootElement, "downgrade_forbidden");
             var installedManifest = await File.ReadAllTextAsync(Path.Combine(root, "nekolla.nekostick.installed", "manifest.json"), TestContext.Current.CancellationToken);
             Assert.Contains("2.0.0", installedManifest, StringComparison.Ordinal);
         }
@@ -140,8 +136,7 @@ public sealed class ExtensionInstallApiTests(ControllerApiFixture fixture) : ICl
 
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
             using var envelope = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-            Assert.Equal("invalid_request", envelope.RootElement.GetProperty("code").GetString());
-            Assert.Contains("not a readable zip", envelope.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+            AssertErrorEnvelope(envelope.RootElement, "invalid_request");
         }
         finally
         {
@@ -175,8 +170,7 @@ public sealed class ExtensionInstallApiTests(ControllerApiFixture fixture) : ICl
 
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
             using var envelope = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-            Assert.Equal("invalid_request", envelope.RootElement.GetProperty("code").GetString());
-            Assert.Contains("manifest.json", envelope.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+            AssertErrorEnvelope(envelope.RootElement, "invalid_request");
         }
         finally
         {
@@ -197,8 +191,7 @@ public sealed class ExtensionInstallApiTests(ControllerApiFixture fixture) : ICl
 
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
             using var envelope = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-            Assert.Equal("invalid_request", envelope.RootElement.GetProperty("code").GetString());
-            Assert.Contains("Bad_Identifier", envelope.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+            AssertErrorEnvelope(envelope.RootElement, "invalid_request");
         }
         finally
         {
@@ -220,7 +213,7 @@ public sealed class ExtensionInstallApiTests(ControllerApiFixture fixture) : ICl
 
             Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
             using var envelope = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-            Assert.Equal("storage_unavailable", envelope.RootElement.GetProperty("code").GetString());
+            AssertErrorEnvelope(envelope.RootElement, "storage_unavailable");
             Assert.Contains("Extension install failed", fixture.Host.LastLogText, StringComparison.Ordinal);
         }
         finally
@@ -245,7 +238,7 @@ public sealed class ExtensionInstallApiTests(ControllerApiFixture fixture) : ICl
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         using var envelope = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-        Assert.Equal("unauthorized", envelope.RootElement.GetProperty("code").GetString());
+        AssertErrorEnvelope(envelope.RootElement, "unauthorized");
     }
 
     [Fact]
@@ -269,7 +262,15 @@ public sealed class ExtensionInstallApiTests(ControllerApiFixture fixture) : ICl
 
         Assert.Equal(501, response.StatusCode);
         using var envelope = JsonDocument.Parse(response.Body.AsMemory());
-        Assert.Equal("unsupported", envelope.RootElement.GetProperty("code").GetString());
+        AssertErrorEnvelope(envelope.RootElement, "unsupported");
+    }
+
+    private static void AssertErrorEnvelope(JsonElement envelope, string code)
+    {
+        Assert.False(envelope.GetProperty("ok").GetBoolean());
+        Assert.Equal(code, envelope.GetProperty("code").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(envelope.GetProperty("details").GetProperty("reason").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(envelope.GetProperty("message").GetString()));
     }
 
     private static async Task<HttpResponseMessage> PostPackageAsync(HttpClient client, byte[] package)

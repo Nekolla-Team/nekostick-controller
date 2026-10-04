@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Nekolla.Nekostick.Controller.Management;
 
 namespace Nekolla.Nekostick.Controller.Adapters.Grpc;
@@ -177,6 +178,8 @@ public sealed class GrpcControllerManagementAdapter : IControllerTransportAdapte
 
         // Do not allow ambient Kestrel endpoint configuration to add a non-loopback listener.
         builder.Configuration.Sources.Clear();
+        builder.Logging.AddProvider(new ControllerManagementLogProvider(
+            (dispatcher as ControllerManagementDispatcher)?.Bridge));
         builder.WebHost.ConfigureKestrel(serverOptions =>
         {
             serverOptions.Limits.MaxRequestBodySize = ControllerAdmissionLimits.MaximumRequestBodyBytes;

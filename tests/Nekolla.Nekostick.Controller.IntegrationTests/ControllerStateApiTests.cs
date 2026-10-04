@@ -43,6 +43,8 @@ public sealed class ControllerStateApiTests(ControllerApiFixture fixture) : ICla
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         Assert.False(document.RootElement.GetProperty("ok").GetBoolean());
         Assert.Equal("invalid_request", document.RootElement.GetProperty("code").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty("details").GetProperty("reason").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty("message").GetString()));
     }
 
     private static void AssertListener(JsonElement listener, bool enabled, bool running)

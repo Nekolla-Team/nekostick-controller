@@ -1,6 +1,9 @@
 using System.Text;
 using Google.Protobuf;
 using Grpc.Core;
+using Grpc.AspNetCore.Server;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Nekolla.Nekostick.Controller.Grpc;
 using Nekolla.Nekostick.Controller.Management;
 
@@ -12,6 +15,16 @@ namespace Nekolla.Nekostick.Controller.Adapters.Grpc;
 public sealed class ControllerManagementGrpcService : ControllerManagement.ControllerManagementBase
 {
     private const string ApiKeyHeaderName = "x-nekostick-controller-key";
+    private static readonly Action<ILogger, string, Exception?> LogUnexpectedDispatcherFailure =
+        LoggerMessage.Define<string>(
+            LogLevel.Error,
+            new EventId(1, nameof(LogUnexpectedDispatcherFailure)),
+            "The gRPC dispatcher failed unexpectedly. TraceId: {TraceId}");
+    private static readonly Action<ILogger, string, Exception?> LogInvalidDispatcherResponse =
+        LoggerMessage.Define<string>(
+            LogLevel.Error,
+            new EventId(2, nameof(LogInvalidDispatcherResponse)),
+            "The gRPC dispatcher response exceeded controller limits. TraceId: {TraceId}");
 
     private readonly IControllerManagementDispatcher _dispatcher;
 
@@ -31,16 +44,74 @@ public sealed class ControllerManagementGrpcService : ControllerManagement.Contr
         context.CancellationToken.ThrowIfCancellationRequested();
 
         var apiKeyResult = TryExtractApiKey(context.RequestHeaders, out var apiKey);
-        if (apiKeyResult == ApiKeyMetadataResult.Unauthorized)
+        if (apiKeyResult == ApiKeyMetadataResult.MissingApiKey)
         {
-            return ToInvokeResponse(ControllerManagementResponseBuilder.Unauthorized);
+            return ToInvokeResponse(
+                ControllerManagementResponseBuilder.Unauthorized(
+                    reason: "api_key_missing",
+                    message: "The gRPC API key metadata is required.",
+                    parameter: ApiKeyHeaderName),
+                context);
         }
 
-        if (apiKeyResult == ApiKeyMetadataResult.InvalidRequest ||
-            request.Body.Length > ControllerAdmissionLimits.MaximumRequestBodyBytes ||
-            !TryCreateEnvelopeHeaders(request, apiKey, out var headers))
+        if (apiKeyResult == ApiKeyMetadataResult.Unauthorized)
         {
-            return ToInvokeResponse(ControllerManagementResponseBuilder.InvalidRequest);
+            return ToInvokeResponse(
+                ControllerManagementResponseBuilder.Unauthorized(
+                    reason: "api_key_invalid",
+                    message: "The gRPC API key metadata must contain exactly one valid text value.",
+                    parameter: ApiKeyHeaderName),
+                context);
+        }
+
+        if (apiKeyResult == ApiKeyMetadataResult.InvalidRequest)
+        {
+            return ToInvokeResponse(
+                ControllerManagementResponseBuilder.InvalidRequest(
+                    reason: "invalid_header",
+                    message: "The gRPC request metadata contains invalid or oversized headers.",
+                    parameter: "headers"),
+                context);
+        }
+
+        if (request.Body.Length > ControllerAdmissionLimits.MaximumRequestBodyBytes)
+        {
+            return ToInvokeResponse(
+                ControllerManagementResponseBuilder.InvalidRequest(
+                    reason: "body_too_large",
+                    message: $"The gRPC request body exceeds the {ControllerAdmissionLimits.MaximumRequestBodyBytes}-byte limit.",
+                    parameter: "body"),
+                context);
+        }
+
+        if (!TryCreateEnvelopeHeaders(request, apiKey, out var headers))
+        {
+            return ToInvokeResponse(
+                ControllerManagementResponseBuilder.InvalidRequest(
+                    reason: "invalid_header",
+                    message: "The gRPC request envelope headers are invalid or exceed the controller's admission limits.",
+                    parameter: "headers"),
+                context);
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Method) || request.Method.Length > 32)
+        {
+            return ToInvokeResponse(
+                ControllerManagementResponseBuilder.InvalidRequest(
+                    reason: "invalid_method",
+                    message: "The gRPC request method is missing or exceeds the controller's method length limit.",
+                    parameter: "method"),
+                context);
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Path) || request.Path.Length > 8192)
+        {
+            return ToInvokeResponse(
+                ControllerManagementResponseBuilder.InvalidRequest(
+                    reason: "invalid_path",
+                    message: "The gRPC request path is missing or exceeds the controller's path length limit.",
+                    parameter: "path"),
+                context);
         }
 
         // Copy only after every transport-native and admission bound has been checked. The
@@ -56,9 +127,13 @@ public sealed class ControllerManagementGrpcService : ControllerManagement.Contr
                 out var managementRequest) ||
             managementRequest is null)
         {
-            return ToInvokeResponse(ControllerManagementResponseBuilder.InvalidRequest);
+            return ToInvokeResponse(
+                ControllerManagementResponseBuilder.InvalidRequest(
+                    reason: "invalid_header",
+                    message: "The gRPC request headers could not be admitted by the controller.",
+                    parameter: "headers"),
+                context);
         }
-
         ControllerManagementResponse response;
         try
         {
@@ -72,19 +147,59 @@ public sealed class ControllerManagementGrpcService : ControllerManagement.Contr
             // envelope after the caller has gone away.
             throw;
         }
-        catch
+        catch (Exception exception)
         {
             // Dispatcher implementations should return canonical responses. Preserve the gRPC
             // envelope contract if an implementation fails outside that contract.
-            response = ControllerManagementResponseBuilder.Unavailable;
+            response = UnexpectedExceptionResponse(context, exception);
         }
 
-        return ToInvokeResponse(response);
+        return ToInvokeResponse(response, context);
+    }
+    private static ControllerManagementResponse UnexpectedExceptionResponse(
+        ServerCallContext context,
+        Exception exception)
+    {
+        var traceId = ControllerManagementCore.CreateTraceId();
+        var logger = context.GetHttpContext().RequestServices
+            .GetRequiredService<ILogger<ControllerManagementGrpcService>>();
+        LogUnexpectedDispatcherFailure(logger, traceId, exception);
+
+        return ControllerManagementResponseBuilder.Error(
+            503,
+            ControllerDispatchCode.Unavailable,
+            "unavailable",
+            "The gRPC management request could not be completed because of an unexpected server error.",
+            details: new ControllerErrorDetails
+            {
+                Reason = "unexpected_exception",
+                TraceId = traceId
+            });
+    }
+
+    private static ControllerManagementResponse InvalidDispatcherResponse(ServerCallContext context)
+    {
+        var traceId = ControllerManagementCore.CreateTraceId();
+        var logger = context.GetHttpContext().RequestServices
+            .GetRequiredService<ILogger<ControllerManagementGrpcService>>();
+        LogInvalidDispatcherResponse(logger, traceId, null);
+
+        return ControllerManagementResponseBuilder.Error(
+            503,
+            ControllerDispatchCode.Unavailable,
+            "unavailable",
+            "The gRPC dispatcher response exceeds the supported body or header limits.",
+            details: new ControllerErrorDetails
+            {
+                Reason = "invalid_dispatcher_response",
+                TraceId = traceId
+            });
     }
 
     private enum ApiKeyMetadataResult
     {
         Valid,
+        MissingApiKey,
         Unauthorized,
         InvalidRequest
     }
@@ -173,7 +288,12 @@ public sealed class ControllerManagementGrpcService : ControllerManagement.Contr
             return ApiKeyMetadataResult.InvalidRequest;
         }
 
-        if (!authenticationHeaderSeen || authenticationHeaderInvalid || candidate is null)
+        if (!authenticationHeaderSeen)
+        {
+            return ApiKeyMetadataResult.MissingApiKey;
+        }
+
+        if (authenticationHeaderInvalid || candidate is null)
         {
             return ApiKeyMetadataResult.Unauthorized;
         }
@@ -258,11 +378,13 @@ public sealed class ControllerManagementGrpcService : ControllerManagement.Contr
         return true;
     }
 
-    private static InvokeResponse ToInvokeResponse(ControllerManagementResponse response)
+    private static InvokeResponse ToInvokeResponse(
+        ControllerManagementResponse response,
+        ServerCallContext context)
     {
         if (response is null || !TryValidateResponse(response))
         {
-            response = ControllerManagementResponseBuilder.Unavailable;
+            response = InvalidDispatcherResponse(context);
         }
 
         var result = new InvokeResponse

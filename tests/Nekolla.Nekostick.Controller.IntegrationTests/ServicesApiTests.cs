@@ -294,6 +294,8 @@ public sealed class ServicesApiTests(ControllerApiFixture fixture) : IClassFixtu
         Assert.Equal(1, envelope.GetProperty("apiVersion").GetInt32());
         Assert.False(envelope.GetProperty("ok").GetBoolean());
         Assert.Equal(code, envelope.GetProperty("code").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(envelope.GetProperty("details").GetProperty("reason").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(envelope.GetProperty("message").GetString()));
     }
 }
 
@@ -435,5 +437,7 @@ public sealed class ServiceRuntimeActionsApi133Tests(ControllerApi133Fixture fix
         Assert.Equal(1, envelope.GetProperty("apiVersion").GetInt32());
         Assert.False(envelope.GetProperty("ok").GetBoolean());
         Assert.Equal(code, envelope.GetProperty("code").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(envelope.GetProperty("details").GetProperty("reason").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(envelope.GetProperty("message").GetString()));
     }
 }

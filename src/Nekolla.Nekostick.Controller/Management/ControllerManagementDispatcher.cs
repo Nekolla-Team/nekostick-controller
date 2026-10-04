@@ -58,6 +58,7 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
 
     /// <summary>Gets whether the dispatcher is accepting authenticated requests.</summary>
     public bool IsStarted => Volatile.Read(ref _state) == 1;
+    internal IExtensionHostBridge? Bridge => _bridge;
 
     /// <summary>Configures runtime reload, fresh state, and telemetry callbacks.</summary>
     internal void ConfigureRuntimeCallbacks(
@@ -158,7 +159,7 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsStarted)
             {
-                return ControllerManagementResponseBuilder.Unavailable;
+                return ControllerManagementResponseBuilder.Unavailable(reason: "dispatcher_not_started", message: "The controller management dispatcher is not started.", parameter: "controller.state");
             }
 
             var configuration = Volatile.Read(ref _configuration);
@@ -189,7 +190,7 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsStarted)
             {
-                return ControllerManagementResponseBuilder.Unavailable;
+                return ControllerManagementResponseBuilder.Unavailable(reason: "dispatcher_not_started", message: "The controller management dispatcher is not started.", parameter: "controller.state");
             }
 
             var configuration = Volatile.Read(ref _configuration);
@@ -220,7 +221,7 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsStarted)
             {
-                return ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.Unavailable);
+                return ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.Unavailable(reason: "dispatcher_not_started", message: "The controller management dispatcher is not started.", parameter: "controller.state"));
             }
 
             var configuration = Volatile.Read(ref _configuration);
@@ -255,7 +256,7 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsStarted)
             {
-                return ControllerRuntimeFeedResult.Rejected(ControllerManagementResponseBuilder.Unavailable);
+                return ControllerRuntimeFeedResult.Rejected(ControllerManagementResponseBuilder.Unavailable(reason: "dispatcher_not_started", message: "The controller management dispatcher is not started.", parameter: "controller.state"));
             }
 
             var configuration = Volatile.Read(ref _configuration);
@@ -289,7 +290,7 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsStarted)
             {
-                return ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.Unavailable);
+                return ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.Unavailable(reason: "dispatcher_not_started", message: "The controller management dispatcher is not started.", parameter: "controller.state"));
             }
 
             var configuration = Volatile.Read(ref _configuration);
@@ -316,16 +317,18 @@ public sealed class ControllerManagementDispatcher : IControllerManagementDispat
     {
         if (!options.IsTransportEnabled(request.Transport))
         {
-            return ControllerManagementResponseBuilder.TransportDisabled;
+            return ControllerManagementResponseBuilder.TransportDisabled(reason: "transport_disabled", message: $"The {request.Transport} management transport is disabled.", parameter: "transport");
         }
 
-        if (!options.IsApiKeyValid(request.ApiKey) ||
-            !request.Headers.TryGetValue(ControllerManagementApiContract.ApiKeyHeaderName, out var keyValues) ||
-            keyValues.Length != 1 ||
-            !options.IsApiKeyValid(keyValues[0]) ||
-            !string.Equals(request.ApiKey, keyValues[0], StringComparison.Ordinal))
+        var headerName = ControllerManagementApiContract.ApiKeyHeaderName;
+        if (!request.Headers.TryGetValue(headerName, out var keyValues) || keyValues.Length == 0 || string.IsNullOrEmpty(request.ApiKey) || string.IsNullOrEmpty(keyValues[0]))
         {
-            return ControllerManagementResponseBuilder.Unauthorized;
+            return ControllerManagementResponseBuilder.Unauthorized(reason: "api_key_missing", message: $"The '{headerName}' header is required.", parameter: headerName);
+        }
+
+        if (keyValues.Length != 1 || !options.IsApiKeyValid(request.ApiKey) || !options.IsApiKeyValid(keyValues[0]) || !string.Equals(request.ApiKey, keyValues[0], StringComparison.Ordinal))
+        {
+            return ControllerManagementResponseBuilder.Unauthorized(reason: "api_key_invalid", message: $"The '{headerName}' header must contain the configured management API key.", parameter: headerName);
         }
 
         return null;

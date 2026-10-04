@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Collections.Immutable;
 using System.Runtime.InteropServices;
 using System.Buffers;
@@ -15,6 +16,7 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Nekolla.Nekostick.Controller.Management;
 using Nekolla.Nekostick.Contracts;
 
@@ -39,6 +41,16 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
         "upgrade",
         "proxy-connection"
     };
+    private static readonly Action<ILogger, string, Exception?> LogUnexpectedRequestFailure =
+        LoggerMessage.Define<string>(
+            LogLevel.Error,
+            new EventId(1, nameof(LogUnexpectedRequestFailure)),
+            "Controller request failed unexpectedly. TraceId: {TraceId}");
+    private static readonly Action<ILogger, string, Exception?> LogStreamAdmissionFailure =
+        LoggerMessage.Define<string>(
+            LogLevel.Error,
+            new EventId(2, nameof(LogStreamAdmissionFailure)),
+            "Controller stream admission failed without a rejection response. TraceId: {TraceId}");
 
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly ControllerTransport _transport;
@@ -287,7 +299,9 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
             ? options.CorsAllowedOrigins
             : ImmutableArray<string>.Empty;
 
+        var hostBridge = (dispatcher as ControllerManagementDispatcher)?.Bridge;
         var builder = new HostBuilder()
+            .ConfigureLogging(logging => logging.AddProvider(new ControllerManagementLogProvider(hostBridge)))
             .ConfigureWebHostDefaults(webBuilder =>
             {
                 webBuilder.ConfigureAppConfiguration((_, configuration) => configuration.Sources.Clear());
@@ -424,17 +438,28 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
             return;
         }
 
-        if (context.Request.ContentLength is > ControllerAdmissionLimits.MaximumRequestBodyBytes)
+        if (context.Request.ContentLength is { } contentLength &&
+            contentLength > ControllerAdmissionLimits.MaximumRequestBodyBytes)
         {
-            await WriteResponseAsync(context, ControllerManagementResponse.InvalidRequest, cancellationToken)
-                .ConfigureAwait(false);
+            await WriteResponseAsync(
+                context,
+                ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                    reason: "body_too_large",
+                    message: $"The request body contains {contentLength.ToString(CultureInfo.InvariantCulture)} bytes, exceeding the {ControllerAdmissionLimits.MaximumRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}-byte limit.",
+                    parameter: "body"),
+                cancellationToken).ConfigureAwait(false);
             return;
         }
 
         if (!TryCopyHeaders(context.Request.Headers, out var headers, out var apiKey))
         {
-            await WriteResponseAsync(context, ControllerManagementResponse.InvalidRequest, cancellationToken)
-                .ConfigureAwait(false);
+            await WriteResponseAsync(
+                context,
+                ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                    reason: "invalid_header",
+                    message: "The request headers are invalid or exceed the controller's header admission limits.",
+                    parameter: "headers"),
+                cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -450,8 +475,55 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
         try
         {
             var bodyLength = await ReadBodyAsync(context.Request, rentedBody, cancellationToken).ConfigureAwait(false);
-            if (bodyLength < 0 ||
-                !ControllerAdmissionLimits.TryCreateRequest(
+            if (bodyLength < 0)
+            {
+                await WriteResponseAsync(
+                    context,
+                    ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                        reason: "body_too_large",
+                        message: $"The request body exceeds the {ControllerAdmissionLimits.MaximumRequestBodyBytes}-byte limit.",
+                        parameter: "body"),
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(context.Request.Method) || context.Request.Method.Length > 32)
+            {
+                await WriteResponseAsync(
+                    context,
+                    ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                        reason: "invalid_method",
+                        message: "The request method is missing or exceeds the controller's method length limit.",
+                        parameter: "method"),
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(path) || path.Length > 8192)
+            {
+                await WriteResponseAsync(
+                    context,
+                    ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                        reason: "invalid_path",
+                        message: "The request path is missing or exceeds the controller's path length limit.",
+                        parameter: "path"),
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            if (apiKey is { Length: > ControllerOptions.MaximumApiKeyLength })
+            {
+                await WriteResponseAsync(
+                    context,
+                    ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                        reason: "api_key_too_large",
+                        message: "The API key header exceeds the maximum supported length.",
+                        parameter: ApiKeyHeaderName),
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            if (!ControllerAdmissionLimits.TryCreateRequest(
                     _transport,
                     context.Request.Method,
                     path,
@@ -461,8 +533,14 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
                     out var request) ||
                 request is null)
             {
-                await WriteResponseAsync(context, ControllerManagementResponse.InvalidRequest, cancellationToken)
-                    .ConfigureAwait(false);
+                await WriteResponseAsync(
+                    context,
+                    RequestAdmissionFailure(
+                        context.Request.Method,
+                        path,
+                        apiKey,
+                        rentedBody.AsMemory(0, bodyLength)),
+                    cancellationToken).ConfigureAwait(false);
                 return;
             }
 
@@ -475,9 +553,12 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
             {
                 return;
             }
-            catch
+            catch (Exception exception)
             {
-                response = ControllerManagementResponse.Unavailable;
+                response = UnexpectedExceptionResponse(
+                    context,
+                    exception,
+                    "The management request could not be completed because of an unexpected server error.");
             }
 
             await WriteResponseAsync(context, response, cancellationToken).ConfigureAwait(false);
@@ -490,8 +571,13 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
         {
             if (!cancellationToken.IsCancellationRequested)
             {
-                await WriteResponseAsync(context, ControllerManagementResponse.InvalidRequest, cancellationToken)
-                    .ConfigureAwait(false);
+                await WriteResponseAsync(
+                    context,
+                    ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                        reason: "request_read_failed",
+                        message: "The request body could not be read from the client connection.",
+                        parameter: "body"),
+                    cancellationToken).ConfigureAwait(false);
             }
         }
         finally
@@ -506,18 +592,44 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
         string requestPath,
         CancellationToken cancellationToken)
     {
-        if (!TryCopyHeaders(context.Request.Headers, out var headers, out var apiKey) ||
-            !ControllerAdmissionLimits.TryCreateRequest(
+        if (!TryCopyHeaders(context.Request.Headers, out var headers, out var apiKey))
+        {
+            await WriteResponseAsync(
+                context,
+                ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                    reason: "invalid_header",
+                    message: "The request headers are invalid or exceed the controller's header admission limits.",
+                    parameter: "headers"),
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (apiKey is { Length: > ControllerOptions.MaximumApiKeyLength })
+        {
+            await WriteResponseAsync(
+                context,
+                ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                    reason: "api_key_too_large",
+                    message: "The API key header exceeds the maximum supported length.",
+                    parameter: ApiKeyHeaderName),
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (!ControllerAdmissionLimits.TryCreateRequest(
                 _transport,
                 "POST",
                 requestPath,
                 apiKey,
-                headers!,
+                headers,
                 ReadOnlyMemory<byte>.Empty,
                 out var request) ||
             request is null)
         {
-            await WriteResponseAsync(context, ControllerManagementResponse.InvalidRequest, cancellationToken).ConfigureAwait(false);
+            await WriteResponseAsync(
+                context,
+                RequestAdmissionFailure("POST", requestPath, apiKey, ReadOnlyMemory<byte>.Empty),
+                cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -537,9 +649,12 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
         {
             return;
         }
-        catch
+        catch (Exception exception)
         {
-            response = ControllerManagementResponse.Unavailable;
+            response = UnexpectedExceptionResponse(
+                context,
+                exception,
+                "The extension install request could not be completed because of an unexpected server error.");
         }
 
         await WriteResponseAsync(context, response, cancellationToken).ConfigureAwait(false);
@@ -555,18 +670,51 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
         if (!context.WebSockets.IsWebSocketRequest)
         {
             // The endpoint exists only as a WebSocket upgrade; plain GET carries no meaning.
-            await WriteResponseAsync(context, ControllerManagementResponse.InvalidRequest, cancellationToken).ConfigureAwait(false);
+            await WriteResponseAsync(
+                context,
+                ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                    reason: "websocket_upgrade_invalid",
+                    message: "The service output stream endpoint requires a valid WebSocket upgrade."),
+                cancellationToken).ConfigureAwait(false);
             return;
         }
 
-        if (!TryParseOutputStreamQuery(context.Request.Query, out var outputStream, out var sinceSequence) ||
-            !TryCopyHeaders(context.Request.Headers, out var headers, out var apiKey))
+        if (!TryParseOutputStreamQuery(context.Request.Query, out var outputStream, out var sinceSequence))
         {
-            await WriteResponseAsync(context, ControllerManagementResponse.InvalidRequest, cancellationToken).ConfigureAwait(false);
+            await WriteResponseAsync(
+                context,
+                ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                    reason: "invalid_stream_query",
+                    message: "If present, the stream query parameter must be stdout or stderr (at most once), and since must be a single non-negative integer."),
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (!TryCopyHeaders(context.Request.Headers, out var headers, out var apiKey))
+        {
+            await WriteResponseAsync(
+                context,
+                ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                    reason: "invalid_header",
+                    message: "The request headers are invalid or exceed the controller's header admission limits.",
+                    parameter: "headers"),
+                cancellationToken).ConfigureAwait(false);
             return;
         }
 
         var effectiveKey = ResolveOutputStreamApiKey(context.WebSockets.WebSocketRequestedProtocols, apiKey);
+        if (effectiveKey is { Length: > ControllerOptions.MaximumApiKeyLength })
+        {
+            await WriteResponseAsync(
+                context,
+                ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                    reason: "api_key_too_large",
+                    message: "The API key supplied for the service output stream exceeds the maximum supported length.",
+                    parameter: ApiKeyHeaderName),
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         if (apiKey is null && effectiveKey is not null)
         {
             // Admission cross-checks the key against the canonical header channel; surface the
@@ -586,7 +734,10 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
                 out var request) ||
             request is null)
         {
-            await WriteResponseAsync(context, ControllerManagementResponse.InvalidRequest, cancellationToken).ConfigureAwait(false);
+            await WriteResponseAsync(
+                context,
+                RequestAdmissionFailure("GET", requestPath, effectiveKey, ReadOnlyMemory<byte>.Empty),
+                cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -599,9 +750,13 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
         {
             return;
         }
-        catch
+        catch (Exception exception)
         {
-            logResult = ControllerServiceLogFeedResult.Rejected(ControllerManagementResponse.Unavailable);
+            logResult = ControllerServiceLogFeedResult.Rejected(
+                UnexpectedExceptionResponse(
+                    context,
+                    exception,
+                    "The service output log feed could not be opened because of an unexpected server error."));
         }
 
         if (logResult.Rejection?.Code == ControllerDispatchCode.Unsupported)
@@ -617,7 +772,9 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
             {
                 await WriteResponseAsync(
                     context,
-                    logResult.Rejection ?? ControllerManagementResponse.Unavailable,
+                    logResult.Rejection ?? StreamAdmissionFailedResponse(
+                        context,
+                        "The service output log feed could not be admitted because the controller returned no feed."),
                     cancellationToken).ConfigureAwait(false);
                 return;
             }
@@ -651,16 +808,22 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
         {
             return;
         }
-        catch
+        catch (Exception exception)
         {
-            result = ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponse.Unavailable);
+            result = ControllerServiceOutputStreamResult.Rejected(
+                UnexpectedExceptionResponse(
+                    context,
+                    exception,
+                    "The service output stream could not be opened because of an unexpected server error."));
         }
 
         if (result.Stream is not { } output)
         {
             await WriteResponseAsync(
                 context,
-                result.Rejection ?? ControllerManagementResponse.Unavailable,
+                result.Rejection ?? StreamAdmissionFailedResponse(
+                    context,
+                    "The service output stream could not be admitted because the controller returned no stream."),
                 cancellationToken).ConfigureAwait(false);
             return;
         }
@@ -692,7 +855,25 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
     {
         if (!TryCopyHeaders(context.Request.Headers, out var headers, out var apiKey))
         {
-            await WriteResponseAsync(context, ControllerManagementResponse.InvalidRequest, cancellationToken).ConfigureAwait(false);
+            await WriteResponseAsync(
+                context,
+                ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                    reason: "invalid_header",
+                    message: "The request headers are invalid or exceed the controller's header admission limits.",
+                    parameter: "headers"),
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (apiKey is { Length: > ControllerOptions.MaximumApiKeyLength })
+        {
+            await WriteResponseAsync(
+                context,
+                ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                    reason: "api_key_too_large",
+                    message: "The API key header exceeds the maximum supported length.",
+                    parameter: ApiKeyHeaderName),
+                cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -706,7 +887,10 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
                 out var request) ||
             request is null)
         {
-            await WriteResponseAsync(context, ControllerManagementResponse.InvalidRequest, cancellationToken).ConfigureAwait(false);
+            await WriteResponseAsync(
+                context,
+                RequestAdmissionFailure("GET", requestPath, apiKey, ReadOnlyMemory<byte>.Empty),
+                cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -719,14 +903,23 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
         {
             return;
         }
-        catch
+        catch (Exception exception)
         {
-            result = ControllerRuntimeFeedResult.Rejected(ControllerManagementResponse.Unavailable);
+            result = ControllerRuntimeFeedResult.Rejected(
+                UnexpectedExceptionResponse(
+                    context,
+                    exception,
+                    "The service runtime feed could not be opened because of an unexpected server error."));
         }
 
         if (result.View is not { } view)
         {
-            await WriteResponseAsync(context, result.Rejection ?? ControllerManagementResponse.Unavailable, cancellationToken).ConfigureAwait(false);
+            await WriteResponseAsync(
+                context,
+                result.Rejection ?? StreamAdmissionFailedResponse(
+                    context,
+                    "The service runtime feed could not be admitted because the controller returned no feed view."),
+                cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -750,6 +943,98 @@ internal sealed class HttpUnixKestrelAdapter : IDisposable
         {
             // Client disconnect or listener stop; the stream disposal already detached the view.
         }
+    }
+    private static ControllerManagementResponse RequestAdmissionFailure(
+        string method,
+        string? path,
+        string? apiKey,
+        ReadOnlyMemory<byte> body)
+    {
+        if (string.IsNullOrWhiteSpace(method))
+        {
+            return ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                "missing_method",
+                "The request method is required.",
+                "method");
+        }
+
+        if (method.Length > 32)
+        {
+            return ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                "invalid_method",
+                "The request method exceeds the controller's method length limit.",
+                "method");
+        }
+
+        if (string.IsNullOrWhiteSpace(path) || path.Length > 8192)
+        {
+            return ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                "invalid_path",
+                "The request path is missing or exceeds the controller's path length limit.",
+                "path");
+        }
+
+        if (body.Length > ControllerAdmissionLimits.MaximumRequestBodyBytes)
+        {
+            return ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                "body_too_large",
+                $"The request body exceeds the {ControllerAdmissionLimits.MaximumRequestBodyBytes}-byte limit.",
+                "body");
+        }
+
+        if (apiKey is { Length: > ControllerOptions.MaximumApiKeyLength })
+        {
+            return ControllerManagementResponseBuilder.InvalidRequestWithReason(
+                "api_key_too_large",
+                "The API key header exceeds the maximum supported length.",
+                ApiKeyHeaderName);
+        }
+
+        return ControllerManagementResponseBuilder.InvalidRequestWithReason(
+            "invalid_header",
+            "The request headers could not be admitted by the controller.",
+            "headers");
+    }
+
+    private static ControllerManagementResponse UnexpectedExceptionResponse(
+        HttpContext context,
+        Exception exception,
+        string message)
+    {
+        var traceId = ControllerManagementCore.CreateTraceId();
+        var logger = context.RequestServices.GetRequiredService<ILogger<HttpUnixKestrelAdapter>>();
+        LogUnexpectedRequestFailure(logger, traceId, exception);
+
+        return ControllerManagementResponseBuilder.Error(
+            StatusCodes.Status503ServiceUnavailable,
+            ControllerDispatchCode.Unavailable,
+            "unavailable",
+            message,
+            details: new ControllerErrorDetails
+            {
+                Reason = "unexpected_exception",
+                TraceId = traceId
+            });
+    }
+
+    private static ControllerManagementResponse StreamAdmissionFailedResponse(
+        HttpContext context,
+        string message)
+    {
+        var traceId = ControllerManagementCore.CreateTraceId();
+        var logger = context.RequestServices.GetRequiredService<ILogger<HttpUnixKestrelAdapter>>();
+        LogStreamAdmissionFailure(logger, traceId, null);
+
+        return ControllerManagementResponseBuilder.Error(
+            StatusCodes.Status503ServiceUnavailable,
+            ControllerDispatchCode.Unavailable,
+            "unavailable",
+            message,
+            details: new ControllerErrorDetails
+            {
+                Reason = "stream_admission_failed",
+                TraceId = traceId
+            });
     }
 
     /// <summary>

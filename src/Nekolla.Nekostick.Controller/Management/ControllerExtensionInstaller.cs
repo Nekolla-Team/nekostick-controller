@@ -31,13 +31,17 @@ internal enum ControllerExtensionInstallOutcome
 /// that backup succeeded; <see langword="null" /> when no restore step was attempted.
 /// </param>
 /// <param name="Reason">The client-facing failure reason when the package or version was rejected.</param>
+/// <param name="ErrorReason">The stable machine-readable reason for the failure.</param>
+/// <param name="TraceId">The correlation identifier for a storage failure log entry.</param>
 internal sealed record ControllerExtensionInstallResult(
     ControllerExtensionInstallOutcome Outcome,
     string? Id,
     string? Version,
     bool Replaced,
     bool? RestoreSucceeded,
-    string? Reason);
+    string? Reason,
+    string? ErrorReason = null,
+    string? TraceId = null);
 
 /// <summary>
 /// Installs uploaded extension zip packages into the host extensions root. The root is derived
@@ -91,19 +95,26 @@ internal static class ControllerExtensionInstaller
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(package);
-        if (ResolveExtensionsRoot() is not { } root)
-        {
-            return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.StorageUnavailable, null, null, false, null, null);
-        }
+        string? root = null;
 
-        var stagingPath = Path.Combine(Path.GetTempPath(), "nekostick-install-" + Guid.NewGuid().ToString("N"));
+        string? stagingPath = null;
         try
         {
+            root = ResolveExtensionsRoot(out var rootFailureMessage);
+            if (root is null)
+            {
+                var rootTraceId = ControllerManagementCore.CreateTraceId();
+                WriteLog(ExtensionLogLevel.Warning, $"traceId={rootTraceId}; Extension install failed: {rootFailureMessage ?? "the extensions root could not be resolved."}");
+                return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.StorageUnavailable, null, null, false, null, null, ErrorReason: "storage_io_failure", TraceId: rootTraceId);
+            }
+
+            stagingPath = Path.Combine(Path.GetTempPath(), "nekostick-install-" + Guid.NewGuid().ToString("N"));
             if (!await TryCopyBoundedAsync(package, stagingPath, cancellationToken).ConfigureAwait(false))
             {
                 return new ControllerExtensionInstallResult(
                     ControllerExtensionInstallOutcome.InvalidPackage, null, null, false, null,
-                    $"The extension package exceeds the {MaximumPackageBytes / (1024 * 1024)} MiB size limit.");
+                    $"The extension package exceeds the {MaximumPackageBytes / (1024 * 1024)} MiB size limit.",
+                    ErrorReason: "package_too_large");
             }
 
             using var archive = OpenArchive(stagingPath);
@@ -111,12 +122,20 @@ internal static class ControllerExtensionInstaller
             {
                 return new ControllerExtensionInstallResult(
                     ControllerExtensionInstallOutcome.InvalidPackage, null, null, false, null,
-                    "The uploaded package is not a readable zip archive.");
+                    "The uploaded package is not a readable zip archive.",
+                    ErrorReason: "invalid_package");
             }
 
-            if (!TryReadManifest(archive, out var id, out var version, out var manifestReason))
+            if (!TryReadManifest(archive, out var id, out var version, out var manifestReason, out var manifestErrorReason))
             {
-                return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.InvalidPackage, null, null, false, null, manifestReason);
+                return new ControllerExtensionInstallResult(
+                    ControllerExtensionInstallOutcome.InvalidPackage,
+                    null,
+                    null,
+                    false,
+                    null,
+                    manifestReason,
+                    manifestErrorReason);
             }
 
             var targetPath = Path.Combine(root, id);
@@ -129,10 +148,26 @@ internal static class ControllerExtensionInstaller
                     $"The installed extension version {installedVersion} is newer than the uploaded package version {version}.");
             }
 
-            var extractOutcome = TryExtract(archive, root, targetPath, out var replaced, out var restoreSucceeded, out var extractReason);
+            var extractOutcome = TryExtract(
+                archive,
+                root,
+                targetPath,
+                out var replaced,
+                out var restoreSucceeded,
+                out var extractReason,
+                out var extractErrorReason,
+                out var traceId);
             if (extractOutcome != ControllerExtensionInstallOutcome.Installed)
             {
-                return new ControllerExtensionInstallResult(extractOutcome, id, version, false, restoreSucceeded, extractReason);
+                return new ControllerExtensionInstallResult(
+                    extractOutcome,
+                    id,
+                    version,
+                    false,
+                    restoreSucceeded,
+                    extractReason,
+                    extractErrorReason,
+                    traceId);
             }
 
             WriteLog(ExtensionLogLevel.Information, $"Installed extension {id} {version} into '{targetPath}' (replaced: {replaced}).");
@@ -144,19 +179,37 @@ internal static class ControllerExtensionInstaller
         }
         catch (IOException exception)
         {
-            WriteLog(ExtensionLogLevel.Warning, $"Extension install failed with a storage error under '{root}' (staged package '{stagingPath}'): {Describe(exception)}");
-            return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.StorageUnavailable, null, null, false, null, null);
+            var traceId = ControllerManagementCore.CreateTraceId();
+            WriteLog(ExtensionLogLevel.Warning, $"traceId={traceId}; Extension install failed with a storage error under '{root}' (staged package '{stagingPath}'): {Describe(exception)}");
+            return new ControllerExtensionInstallResult(
+                ControllerExtensionInstallOutcome.StorageUnavailable,
+                null,
+                null,
+                false,
+                null,
+                null,
+                "storage_io_failure",
+                traceId);
         }
         catch (UnauthorizedAccessException exception)
         {
-            WriteLog(ExtensionLogLevel.Warning, $"Extension install failed with an access error under '{root}' (staged package '{stagingPath}'): {Describe(exception)}");
-            return new ControllerExtensionInstallResult(ControllerExtensionInstallOutcome.StorageUnavailable, null, null, false, null, null);
+            var traceId = ControllerManagementCore.CreateTraceId();
+            WriteLog(ExtensionLogLevel.Warning, $"traceId={traceId}; Extension install failed with an access error under '{root}' (staged package '{stagingPath}'): {Describe(exception)}");
+            return new ControllerExtensionInstallResult(
+                ControllerExtensionInstallOutcome.StorageUnavailable,
+                null,
+                null,
+                false,
+                null,
+                null,
+                "storage_io_failure",
+                traceId);
         }
         finally
         {
             try
             {
-                if (File.Exists(stagingPath))
+                if (stagingPath is not null && File.Exists(stagingPath))
                 {
                     File.Delete(stagingPath);
                 }
@@ -171,8 +224,9 @@ internal static class ControllerExtensionInstaller
         }
     }
 
-    private static string? ResolveExtensionsRoot()
+    private static string? ResolveExtensionsRoot(out string? failureMessage)
     {
+        failureMessage = null;
         if (_rootPathOverride is { } rootOverride)
         {
             return rootOverride();
@@ -181,7 +235,7 @@ internal static class ControllerExtensionInstaller
         var location = typeof(ControllerEntrypoint).Assembly.Location;
         if (string.IsNullOrEmpty(location))
         {
-            WriteLog(ExtensionLogLevel.Warning, "Extension install failed: the controller assembly location is empty (single-file deployment?), so the extensions root cannot be derived.");
+            failureMessage = "the controller assembly location is empty (single-file deployment?), so the extensions root cannot be derived.";
             return null;
         }
 
@@ -195,7 +249,7 @@ internal static class ControllerExtensionInstaller
             var resolvedDirectory = ResolveSymbolicAncestors(extensionDirectory);
             if (resolvedDirectory is null)
             {
-                WriteLog(ExtensionLogLevel.Warning, $"Extension install failed: the controller extension directory '{extensionDirectory}' has an unresolvable symbolic link ancestor, so the real extensions root cannot be derived.");
+                failureMessage = $"the controller extension directory '{extensionDirectory}' has an unresolvable symbolic link ancestor, so the real extensions root cannot be derived.";
                 return null;
             }
 
@@ -205,7 +259,7 @@ internal static class ControllerExtensionInstaller
         var root = extensionDirectory is null ? null : Path.GetDirectoryName(extensionDirectory);
         if (root is null)
         {
-            WriteLog(ExtensionLogLevel.Warning, $"Extension install failed: the extensions root cannot be derived from the controller assembly location '{location}'.");
+            failureMessage = $"the extensions root cannot be derived from the controller assembly location '{location}'.";
         }
 
         return root;
@@ -294,21 +348,29 @@ internal static class ControllerExtensionInstaller
         }
     }
 
-    private static bool TryReadManifest(ZipArchive archive, out string id, out string version, out string? reason)
+    private static bool TryReadManifest(
+        ZipArchive archive,
+        out string id,
+        out string version,
+        out string? reason,
+        out string errorReason)
     {
         id = string.Empty;
         version = string.Empty;
         reason = null;
+        errorReason = "manifest_invalid";
         var entry = archive.GetEntry(ManifestFileName);
         if (entry is null)
         {
             reason = "The extension package has no manifest.json at the zip root.";
+            errorReason = "manifest_missing";
             return false;
         }
 
         if (entry.Length > ControllerAdmissionLimits.MaximumRequestBodyBytes)
         {
             reason = $"The manifest.json exceeds the {ControllerAdmissionLimits.MaximumRequestBodyBytes / (1024 * 1024)} MiB size limit.";
+            errorReason = "manifest_too_large";
             return false;
         }
 
@@ -339,24 +401,28 @@ internal static class ControllerExtensionInstaller
             if (!IsValidExtensionId(id))
             {
                 reason = $"The manifest id '{id}' is invalid; use dot or dash separated lowercase alphanumeric segments, at most 128 characters.";
+                errorReason = "invalid_extension_id";
                 return false;
             }
 
             if (!TrySplitVersion(version, out _, out _))
             {
                 reason = $"The manifest version '{version}' is not a valid semantic version.";
+                errorReason = "invalid_version";
                 return false;
             }
 
             return true;
         }
-        catch (JsonException exception)
+        catch (JsonException)
         {
-            reason = "The manifest.json is not valid JSON: " + exception.Message;
+            reason = "The manifest.json is not valid JSON.";
+            errorReason = "manifest_invalid_json";
             return false;
         }
         catch (InvalidDataException)
         {
+            reason = "The manifest.json is invalid.";
             return false;
         }
     }
@@ -440,11 +506,15 @@ internal static class ControllerExtensionInstaller
         string targetPath,
         out bool replaced,
         out bool? restoreSucceeded,
-        out string? reason)
+        out string? reason,
+        out string? errorReason,
+        out string? traceId)
     {
         replaced = false;
         restoreSucceeded = null;
         reason = null;
+        errorReason = null;
+        traceId = null;
         var stagingDirectory = Path.Combine(root, ".install-" + Guid.NewGuid().ToString("N"));
         try
         {
@@ -461,6 +531,7 @@ internal static class ControllerExtensionInstaller
                 var destination = Path.GetFullPath(Path.Combine(stagingRoot, relativePath));
                 if (!destination.StartsWith(stagingRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
                 {
+                    errorReason = "unsafe_archive_entry";
                     reason = $"The package entry '{entry.FullName}' escapes the target directory.";
                     return ControllerExtensionInstallOutcome.InvalidPackage;
                 }
@@ -468,6 +539,7 @@ internal static class ControllerExtensionInstaller
                 extractedTotal += entry.Length;
                 if (extractedTotal > MaximumExtractedBytes)
                 {
+                    errorReason = "package_extracted_size_too_large";
                     reason = $"The extracted package contents exceed the {MaximumExtractedBytes / (1024 * 1024)} MiB limit.";
                     return ControllerExtensionInstallOutcome.InvalidPackage;
                 }
@@ -504,7 +576,9 @@ internal static class ControllerExtensionInstaller
                 {
                     // The backup rename failed before anything moved, so the previous installation
                     // is still in place and no restore step is needed.
-                    WriteLog(ExtensionLogLevel.Warning, $"Extension install failed: could not move the previous installation '{targetPath}' aside to '{backupPath}': {Describe(exception)}");
+                    traceId = ControllerManagementCore.CreateTraceId();
+                    errorReason = "storage_io_failure";
+                    WriteLog(ExtensionLogLevel.Warning, $"traceId={traceId}; Extension install failed: could not move the previous installation '{targetPath}' aside to '{backupPath}': {Describe(exception)}");
                     return ControllerExtensionInstallOutcome.StorageUnavailable;
                 }
             }
@@ -515,12 +589,23 @@ internal static class ControllerExtensionInstaller
             }
             catch (Exception exception)
             {
-                WriteLog(ExtensionLogLevel.Warning, $"Extension install failed: could not move the staged directory '{stagingDirectory}' into place at '{targetPath}': {Describe(exception)}");
+                traceId = ControllerManagementCore.CreateTraceId();
+                WriteLog(ExtensionLogLevel.Warning, $"traceId={traceId}; Extension install failed: could not move the staged directory '{stagingDirectory}' into place at '{targetPath}': {Describe(exception)}");
                 if (backupPath is not null)
                 {
-                    restoreSucceeded = TryRestoreBackup(backupPath, targetPath);
+                    restoreSucceeded = TryRestoreBackup(backupPath, targetPath, out var restoreTraceId);
+                    if (restoreTraceId is not null)
+                    {
+                        traceId = restoreTraceId;
+                    }
                 }
 
+                errorReason = restoreSucceeded switch
+                {
+                    true => "install_failed_restored",
+                    false => "install_failed_restore_failed",
+                    _ => "storage_io_failure"
+                };
                 return ControllerExtensionInstallOutcome.StorageUnavailable;
             }
 
@@ -550,8 +635,9 @@ internal static class ControllerExtensionInstaller
         }
     }
 
-    private static bool TryRestoreBackup(string backupPath, string targetPath)
+    private static bool TryRestoreBackup(string backupPath, string targetPath, out string? traceId)
     {
+        traceId = null;
         try
         {
             if (Directory.Exists(targetPath))
@@ -564,7 +650,8 @@ internal static class ControllerExtensionInstaller
         }
         catch (Exception exception)
         {
-            WriteLog(ExtensionLogLevel.Warning, $"Extension install failed: could not restore the backup '{backupPath}' to '{targetPath}': {Describe(exception)}");
+            traceId = ControllerManagementCore.CreateTraceId();
+            WriteLog(ExtensionLogLevel.Warning, $"traceId={traceId}; Extension install failed: could not restore the backup '{backupPath}' to '{targetPath}': {Describe(exception)}");
             return false;
         }
     }
