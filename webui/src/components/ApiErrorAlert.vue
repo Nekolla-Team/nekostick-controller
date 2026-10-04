@@ -59,7 +59,7 @@ const showDetails = ref(false)
   <n-alert v-if="error" type="error" :title="title ?? t('errors.title')" :show-icon="true">
     <div>{{ errorDetails.message }}</div>
     <small v-if="combinedLine">{{ combinedLine }}</small>
-    <n-button v-if="apiError" size="small" text type="primary" @click="showDetails = true">
+    <n-button v-if="apiError" size="small" text type="primary" style="margin-left: 0.75em" @click="showDetails = true">
       {{ t('errors.dialog.open') }}
     </n-button>
     <ApiErrorDetailsDialog v-if="apiError" v-model:show="showDetails" :error="apiError" />
