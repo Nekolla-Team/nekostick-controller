@@ -38,7 +38,14 @@ import {
   reloadExtension,
 } from '../api/resources/extensions'
 import { ApiClientError } from '../api/client'
-import type { ExtensionInstallResult, ExtensionRecord, ExtensionSettings, JsonObject, JsonValue } from '../api/types'
+import type {
+  ExtensionInstallResult,
+  ExtensionRecord,
+  ExtensionScanSkip,
+  ExtensionSettings,
+  JsonObject,
+  JsonValue,
+} from '../api/types'
 import { useCas } from '../composables/useCas'
 import { t } from '../i18n'
 
@@ -64,6 +71,8 @@ const showUploadModal = ref(false)
 const uploadEntries = ref<UploadEntry[]>([])
 const selectedUploadError = ref<ApiClientError | null>(null)
 const showUploadErrorDetails = ref(false)
+const refreshSkipped = ref<ExtensionScanSkip[] | null>(null)
+const showRefreshSkippedModal = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const uploadQueueRunning = ref(false)
 let nextUploadId = 0
@@ -345,6 +354,7 @@ const refreshMutation = useMutation({
   mutationFn: refreshExtensions,
   onSuccess: async (summary) => {
     message.success(t('extensions.refresh.summary', { added: summary.added.length, updated: summary.versionUpdated.length, missing: summary.missing.length, skipped: summary.skipped?.length ?? 0 }))
+    refreshSkipped.value = summary.skipped ?? null
     await queryClient.invalidateQueries({ queryKey: ['extensions'] })
   },
 })
@@ -447,6 +457,9 @@ const columns = computed<DataTableColumns<ExtensionRecord>>(() => [
         <n-button :loading="refreshMutation.isPending.value" @click="refreshMutation.mutate()">
           {{ t('extensions.refresh.button') }}
         </n-button>
+        <n-button v-if="refreshSkipped?.length" text size="small" @click="showRefreshSkippedModal = true">
+          {{ t('extensions.refresh.skippedDetails') }}
+        </n-button>
       </n-space>
     </header>
     <ApiErrorAlert v-if="extensionsQuery.isError.value" :error="extensionsQuery.error.value" />
@@ -519,6 +532,23 @@ const columns = computed<DataTableColumns<ExtensionRecord>>(() => [
         </div>
       </n-card>
     </n-modal>
+    <n-modal :show="showRefreshSkippedModal" @update:show="(show) => { showRefreshSkippedModal = show }">
+      <n-card :title="t('extensions.refresh.skippedTitle')" closable @close="showRefreshSkippedModal = false">
+        <n-space vertical>
+          <n-space
+            v-for="(skip, index) in refreshSkipped ?? []"
+            :key="`${skip.directoryName}-${index}`"
+            vertical
+            :size="4"
+          >
+            <div><strong>{{ t('extensions.refresh.directory') }}:</strong> {{ skip.directoryName }}</div>
+            <div><strong>{{ t('extensions.refresh.failureCode') }}:</strong> {{ skip.failureCode }}</div>
+            <div><strong>{{ t('extensions.refresh.message') }}:</strong> {{ skip.message }}</div>
+          </n-space>
+        </n-space>
+      </n-card>
+    </n-modal>
+
     <ApiErrorDetailsDialog
       v-if="selectedUploadError"
       v-model:show="showUploadErrorDetails"

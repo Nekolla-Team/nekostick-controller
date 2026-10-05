@@ -2,6 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { NButton, NRadioButton, NRadioGroup, NSpace, NTag } from 'naive-ui'
+import ApiErrorAlert from '../components/ApiErrorAlert.vue'
+import type { ApiClientError } from '../api/client'
 import { connection } from '../stores/connection'
 import {
   buildServiceOutputEventStreamUrl,
@@ -34,6 +36,7 @@ interface ServiceLogDisplayEvent {
 type ConnectionStatus = 'connecting' | 'live' | 'closed' | 'error'
 const status = ref<ConnectionStatus>('connecting')
 const closeReason = ref<string | null>(null)
+const streamError = ref<ApiClientError | null>(null)
 const logItems = ref<OutputDisplayItem[]>([])
 const truncated = ref(false)
 const logElement = ref<HTMLElement | null>(null)
@@ -245,6 +248,7 @@ function connectEventStream(
       sseHandle = null
       appendOutput(active.decode())
       if (decoder === active) decoder = null
+      streamError.value = failure.kind === 'http' ? failure.error ?? null : null
       closeReason.value = describeStreamFailure(failure)
       status.value = 'error'
     },
@@ -256,7 +260,7 @@ function connectEventStream(
 function describeStreamFailure(failure: ServiceOutputEventStreamFailure): string {
   if (failure.kind === 'network') return t('serviceOutput.failed.network')
   if (failure.kind === 'truncated') return t('serviceOutput.failed.interrupted')
-  switch (failure.code) {
+  switch (failure.error?.code) {
     case 'not_running':
       return t('serviceOutput.failed.notRunning')
     case 'not_found':
@@ -276,8 +280,8 @@ function describeStreamFailure(failure: ServiceOutputEventStreamFailure): string
 function connect(): void {
   closeTransport()
   closeReason.value = null
+  streamError.value = null
   truncated.value = false
-
   const apiKey = connection.apiKey
   const activeStream = stream.value
   const url = buildServiceOutputUrl(serviceId.value, activeStream)
@@ -394,6 +398,7 @@ connect()
         </n-button>
       </n-space>
     </header>
+    <ApiErrorAlert v-if="streamError" :error="streamError" />
     <div
       v-show="logItems.length > 0"
       ref="logElement"

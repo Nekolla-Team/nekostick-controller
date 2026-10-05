@@ -21,12 +21,15 @@ internal sealed class ControllerRuntimeStateFeed : IAsyncDisposable
     private readonly object _gate = new();
     private IExtensionServiceRuntimeStateSubscription? _subscription;
     private bool _completed;
+    internal bool SubscriptionRejected { get; private set; }
+    internal string? SubscriptionRejectionMessage { get; private set; }
 
     private ControllerRuntimeStateFeed() { }
 
     /// <summary>
-    /// Creates and starts a feed against the 1.4 bridge, or returns null when the host lacks the
-    /// runtime-state capability. Rejection codes other than success leave no partially started feed.
+    /// Creates and starts a feed against the 1.4 bridge. A null result means the host lacks the
+    /// runtime-state capability; a rejected subscription retains its safe message for the endpoint
+    /// without exposing a partially started feed.
     /// </summary>
     internal static async ValueTask<ControllerRuntimeStateFeed?> TryStartAsync(
         IExtensionHostBridge bridge,
@@ -56,10 +59,26 @@ internal sealed class ControllerRuntimeStateFeed : IAsyncDisposable
 
         if (!result.Succeeded || result.Subscription is null)
         {
+            if (!result.Succeeded)
+            {
+                return CreateRejectedFeed(feed, result);
+            }
+
             return null;
         }
 
         feed._subscription = result.Subscription;
+        return feed;
+    }
+
+    /// <summary>NoInlining: keeps preview failure details behind the runtime feed capability guard.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static ControllerRuntimeStateFeed CreateRejectedFeed(
+        ControllerRuntimeStateFeed feed,
+        ExtensionServiceRuntimeStateSubscriptionResult result)
+    {
+        feed.SubscriptionRejected = true;
+        feed.SubscriptionRejectionMessage = result.Detail is { } detail ? detail.Message : null;
         return feed;
     }
 

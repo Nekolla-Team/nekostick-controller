@@ -23,6 +23,11 @@ export const extensions = {
   refresh: {
     button: 'Refresh directory',
     summary: '{added} added, {updated} version-updated, {missing} missing, {skipped} skipped',
+    skippedDetails: 'View skipped details',
+    skippedTitle: 'Skipped extension directories',
+    directory: 'Directory',
+    failureCode: 'Failure code',
+    message: 'Message',
   },
   install: {
     button: 'Add / update extension',

@@ -11,6 +11,7 @@ import {
   type ServiceOutputEndReason,
   type ServiceOutputEventStreamFailure,
 } from '../src/api/serviceOutput';
+import { ApiClientError } from '../src/api/client';
 import { saveConnection } from '../src/stores/connection';
 
 function decodeBase64Url(encoded: string): string {
@@ -155,69 +156,98 @@ describe('service output event stream', () => {
   });
 
 
-  it('reports non-200 responses as http failures with the status', async () => {
+  it('parses malformed HTTP errors into ApiClientError with the response status', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 409 })));
 
-    let failure: ServiceOutputEventStreamFailure | null = null;
+    const failures: ServiceOutputEventStreamFailure[] = [];
     const handle = openServiceOutputEventStream('http://x/stream', 'key', {
       onOpen: () => undefined,
       onChunk: () => undefined,
       onState: () => undefined,
       onEnd: () => undefined,
       onFailure: (reason) => {
-        failure = reason;
+        failures.push(reason);
       },
     });
     await handle.done;
 
-    expect(failure).toEqual({ kind: 'http', status: 409 });
+    const failure = failures[0];
+    expect(failure).toBeDefined();
+    expect(failure?.kind).toBe('http');
+    if (failure?.kind === 'http') {
+      expect(failure.status).toBe(409);
+      expect(failure.error).toBeInstanceOf(ApiClientError);
+      expect(failure.error?.kind).toBe('transport');
+      expect(failure.error?.message).toBe('The controller response was not valid JSON.');
+    }
     vi.unstubAllGlobals();
   });
 
   it('reports an EOF without an end event as truncated', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => sseResponse(`data:${btoa('partial')}\n\n`)));
 
-    let failure: ServiceOutputEventStreamFailure | null = null;
+    const failures: ServiceOutputEventStreamFailure[] = [];
     const handle = openServiceOutputEventStream('http://x/stream', 'key', {
       onOpen: () => undefined,
       onChunk: () => undefined,
       onState: () => undefined,
       onEnd: () => undefined,
       onFailure: (reason) => {
-        failure = reason;
+        failures.push(reason);
       },
     });
     await handle.done;
 
-    expect(failure).toEqual({ kind: 'truncated' });
+    expect(failures[0]).toEqual({ kind: 'truncated' });
     vi.unstubAllGlobals();
   });
 
-  it('surfaces the controller error envelope code on http failures', async () => {
+  it('preserves the complete controller error envelope on HTTP failures', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(
         async () =>
-          new Response(JSON.stringify({ code: 'not_running', message: 'no live output' }), {
+          new Response(JSON.stringify({
+            apiVersion: 1,
+            ok: false,
+            code: 'not_running',
+            message: 'no live output',
+            data: null,
+            version: null,
+            details: { reason: 'not_running', traceId: 'stream-trace-1' },
+            errors: [{ field: 'stream', reason: 'service_not_running', message: 'no live output' }],
+          }), {
             status: 409,
             headers: { 'content-type': 'application/json' },
           }),
       ),
     );
 
-    let failure: ServiceOutputEventStreamFailure | null = null;
+    const failures: ServiceOutputEventStreamFailure[] = [];
     const handle = openServiceOutputEventStream('http://x/stream', 'key', {
       onOpen: () => undefined,
       onChunk: () => undefined,
       onState: () => undefined,
       onEnd: () => undefined,
       onFailure: (reason) => {
-        failure = reason;
+        failures.push(reason);
       },
     });
     await handle.done;
 
-    expect(failure).toEqual({ kind: 'http', status: 409, code: 'not_running' });
+    const failure = failures[0];
+    expect(failure).toBeDefined();
+    expect(failure?.kind).toBe('http');
+    if (failure?.kind === 'http') {
+      expect(failure.status).toBe(409);
+      expect(failure.error).toBeInstanceOf(ApiClientError);
+      expect(failure.error?.message).toBe('no live output');
+      expect(failure.error?.code).toBe('not_running');
+      expect(failure.error?.details).toEqual({ reason: 'not_running', traceId: 'stream-trace-1' });
+      expect(failure.error?.errors).toEqual([
+        { field: 'stream', reason: 'service_not_running', message: 'no live output' },
+      ]);
+    }
     vi.unstubAllGlobals();
   });
 });

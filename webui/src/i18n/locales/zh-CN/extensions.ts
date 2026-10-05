@@ -23,6 +23,11 @@ export const extensions = {
   refresh: {
     button: '刷新目录',
     summary: '新增 {added} 个，版本更新 {updated} 个，缺失 {missing} 个，跳过 {skipped} 个',
+    skippedDetails: '查看跳过详情',
+    skippedTitle: '跳过的扩展目录',
+    directory: '目录',
+    failureCode: '失败代码',
+    message: '说明',
   },
   install: {
     button: '添加/更新扩展',

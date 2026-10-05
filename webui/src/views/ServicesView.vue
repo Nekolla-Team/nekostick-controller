@@ -449,6 +449,7 @@ const columns = computed<DataTableColumns<ServiceDto>>(() => [
     </header>
 
     <ApiErrorAlert v-if="servicesQuery.isError.value" :error="servicesQuery.error.value" />
+    <ApiErrorAlert v-if="runtimeFeed.feedError.value" :error="runtimeFeed.feedError.value" />
     <ApiErrorAlert v-if="toggleMutation.isError.value" :error="toggleMutation.error.value" />
     <ApiErrorAlert v-if="deleteMutation.isError.value" :error="deleteMutation.error.value" />
     <n-spin :show="servicesQuery.isLoading.value">

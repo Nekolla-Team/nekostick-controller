@@ -40,7 +40,7 @@ public sealed class ControllerExtensionRefreshReadDto
     [JsonPropertyName("versionUpdated")] public ImmutableArray<string> VersionUpdated { get; init; } = ImmutableArray<string>.Empty;
     /// <summary>Extension identifiers whose manifest was missing from the scan.</summary>
     [JsonPropertyName("missing")] public ImmutableArray<string> Missing { get; init; } = ImmutableArray<string>.Empty;
-    /// <summary>Directories skipped during the refresh scan with their failure categories; null on hosts older than API 1.3.4.</summary>
+    /// <summary>Directories skipped during the refresh scan with their failure categories and messages; null on hosts older than API 1.3.4.</summary>
     [JsonPropertyName("skipped")] public ImmutableArray<ControllerExtensionScanSkipDto>? Skipped { get; init; }
 }
 
@@ -51,6 +51,8 @@ public sealed class ControllerExtensionScanSkipDto
     [JsonPropertyName("directoryName")] public string DirectoryName { get; init; } = string.Empty;
     /// <summary>Stable failure category name (a member name of the extension failure code enum).</summary>
     [JsonPropertyName("failureCode")] public string FailureCode { get; init; } = string.Empty;
+    /// <summary>Safe human-readable detail message supplied by the host for the scan failure.</summary>
+    [JsonPropertyName("message")] public string Message { get; init; } = string.Empty;
 }
 
 /// <summary>Read representation of one extension package install result.</summary>

@@ -138,7 +138,8 @@ internal static class ControllerContractMapper
         Skipped = source.Skipped.Select(static skip => new ControllerExtensionScanSkipDto
         {
             DirectoryName = skip.DirectoryName,
-            FailureCode = skip.FailureCode
+            FailureCode = skip.FailureCode,
+            Message = skip.Detail.Message
         }).ToImmutableArray()
     };
 

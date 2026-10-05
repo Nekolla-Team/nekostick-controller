@@ -43,12 +43,13 @@ internal sealed partial class ControllerManagementCore
                 return ControllerServiceOutputStreamResult.Opened(output, CancellationToken.None);
             }
 
+            var detailMessage = result.Detail?.Message;
             return result.Code switch
             {
-                ExtensionServiceOutputCode.NotFound => ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.NotFound(reason: "unknown_service", message: $"Service '{serviceId}' was not found.", parameter: serviceId.ToString())),
-                ExtensionServiceOutputCode.NotRunning => ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.ServiceNotRunning(reason: "not_running", message: $"Service '{serviceId}' is not running and has no live output to stream.", parameter: serviceId.ToString())),
-                ExtensionServiceOutputCode.Unsupported => ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.Unsupported(reason: "operation_not_supported", message: "The host does not support the requested service output stream.")),
-                _ => ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.Unavailable(reason: "stream_open_failed", message: $"The host could not open a service output stream for service '{serviceId}'.", parameter: serviceId.ToString()))
+                ExtensionServiceOutputCode.NotFound => ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.NotFound(reason: "unknown_service", message: detailMessage ?? $"Service '{serviceId}' was not found.", parameter: serviceId.ToString())),
+                ExtensionServiceOutputCode.NotRunning => ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.ServiceNotRunning(reason: "not_running", message: detailMessage ?? $"Service '{serviceId}' is not running and has no live output to stream.", parameter: serviceId.ToString())),
+                ExtensionServiceOutputCode.Unsupported => ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.Unsupported(reason: "operation_not_supported", message: detailMessage ?? "The host does not support the requested service output stream.")),
+                _ => ControllerServiceOutputStreamResult.Rejected(ControllerManagementResponseBuilder.Unavailable(reason: "stream_open_failed", message: detailMessage ?? $"The host could not open a service output stream for service '{serviceId}'.", parameter: serviceId.ToString()))
             };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -125,12 +126,13 @@ internal sealed partial class ControllerManagementCore
             .ConfigureAwait(false);
         if (!result.Succeeded || result.Subscription is null)
         {
+            var detailMessage = result.Detail?.Message;
             return result.Code switch
             {
-                ExtensionServiceLogCode.NotFound => ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.NotFound(reason: "unknown_service", message: $"Service '{serviceId}' was not found.", parameter: serviceId.ToString())),
-                ExtensionServiceLogCode.InvalidArgument or ExtensionServiceLogCode.InvalidCursor => ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.InvalidRequest("invalid_argument", "The 'sinceSequence' parameter must be a non-negative log sequence number.", "sinceSequence")),
-                ExtensionServiceLogCode.Unsupported => ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.Unsupported(reason: "operation_not_supported", message: "The host does not support the requested service log feed.")),
-                _ => ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.Unavailable(reason: "stream_open_failed", message: $"The host could not open a service log feed for service '{serviceId}'.", parameter: serviceId.ToString()))
+                ExtensionServiceLogCode.NotFound => ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.NotFound(reason: "unknown_service", message: detailMessage ?? $"Service '{serviceId}' was not found.", parameter: serviceId.ToString())),
+                ExtensionServiceLogCode.InvalidArgument or ExtensionServiceLogCode.InvalidCursor => ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.InvalidRequest("invalid_argument", detailMessage ?? "The 'sinceSequence' parameter must be a non-negative log sequence number.", "sinceSequence")),
+                ExtensionServiceLogCode.Unsupported => ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.Unsupported(reason: "operation_not_supported", message: detailMessage ?? "The host does not support the requested service log feed.")),
+                _ => ControllerServiceLogFeedResult.Rejected(ControllerManagementResponseBuilder.Unavailable(reason: "stream_open_failed", message: detailMessage ?? $"The host could not open a service log feed for service '{serviceId}'.", parameter: serviceId.ToString()))
             };
         }
 

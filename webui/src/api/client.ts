@@ -300,6 +300,22 @@ async function parseResponse(response: Response): Promise<ParsedResponse> {
   };
 }
 
+/** Parse one failed fetch response with the shared envelope and ApiClientError mapping. */
+export async function parseApiErrorResponse(response: Response): Promise<ApiClientError> {
+  if (response.ok) {
+    throw new TypeError('A successful response cannot be parsed as an API error.');
+  }
+
+  try {
+    await parseResponse(response);
+  } catch (error: unknown) {
+    if (error instanceof ApiClientError) return error;
+    throw error;
+  }
+
+  throw new TypeError('An unsuccessful response was parsed without an API error.');
+}
+
 function requestInit(method: string, options: RequestOptions): RequestInit {
   const headers: Record<string, string> = {};
   if (connection.apiKey !== null) {

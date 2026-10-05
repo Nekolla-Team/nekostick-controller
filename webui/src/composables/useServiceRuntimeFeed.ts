@@ -4,6 +4,7 @@ import {
   openServiceRuntimeFeed,
   type ServiceRuntimeFeedHandle,
 } from '../api/serviceRuntimeFeed'
+import type { ApiClientError } from '../api/client'
 import type { ServiceRuntimeFeedEntry, ServiceRuntimeSnapshot } from '../api/types'
 import { connection } from '../stores/connection'
 
@@ -15,6 +16,7 @@ const reconnectMaxDelayMs = 30000
 export function useServiceRuntimeFeed() {
   const queryClient = useQueryClient()
   const pollingEnabled = ref(true)
+  const feedError = ref<ApiClientError | null>(null)
   let handle: ServiceRuntimeFeedHandle | null = null
   let replayIdleTimer: ReturnType<typeof setTimeout> | null = null
   let retryTimer: ReturnType<typeof setTimeout> | null = null
@@ -127,6 +129,7 @@ export function useServiceRuntimeFeed() {
     handle = openServiceRuntimeFeed(apiKey, {
       onOpen: () => {
         if (disposed || version !== subscriptionVersion) return
+        feedError.value = null
         scheduleReplayIdleCheck()
       },
       onEntry: (entry) => {
@@ -150,6 +153,7 @@ export function useServiceRuntimeFeed() {
         if (disposed || version !== subscriptionVersion) return
         handle = null
         clearReplayIdleTimer()
+        feedError.value = failure.kind === 'http' ? failure.error ?? null : null
         if (failure.kind === 'http' && failure.status === 501) {
           pollingEnabled.value = true
           return
@@ -163,6 +167,7 @@ export function useServiceRuntimeFeed() {
     () => [connection.baseUrl, connection.apiKey] as const,
     () => {
       stopCurrentFeed()
+      feedError.value = null
       reconnectAttempts = 0
       pollingEnabled.value = true
       if (connection.apiKey) connect()
@@ -176,5 +181,5 @@ export function useServiceRuntimeFeed() {
     stopCurrentFeed()
   })
 
-  return { pollingEnabled }
+  return { pollingEnabled, feedError }
 }

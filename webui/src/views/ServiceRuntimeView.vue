@@ -144,6 +144,7 @@ function openOutputWindow(): void {
     </header>
     <ApiErrorAlert v-if="runtimeQuery.isError.value && !runtimeNotFound" :error="runtimeQuery.error.value" />
     <ApiErrorAlert v-if="runtimeMutation.isError.value" :error="runtimeMutation.error.value" />
+    <ApiErrorAlert v-if="runtimeFeed.feedError.value" :error="runtimeFeed.feedError.value" />
     <n-spin :show="runtimeQuery.isLoading.value">
       <n-card v-if="runtimeUnavailable">
         <n-empty :description="t('serviceRuntime.unavailable')" />

@@ -577,7 +577,7 @@ reload 成功的 `data` 是 `{"outcome": "..."}`：
 
 enable、disable 和 record 三者在任何 transport 上的语义一致（Host 会把 route callback 中的 publish 推迟到 callback 返回之后）。
 
-`POST /v1/extensions/refresh` 要求 Host 重新扫描扩展目录，请求 body 必须为空，成功响应是无版本 envelope（不带 ETag）：
+`POST /v1/extensions/refresh` 要求 Host 重新扫描扩展目录，请求 body 必须为空，成功响应是无版本 envelope（不带 ETag）。Host API >=1.3.4 会返回 `skipped` 数组，每项包含目录名、稳定失败代码和 Host 提供的安全详情消息；较旧 Host 的 `skipped` 为 `null`：
 
 ```json
 {
@@ -585,7 +585,7 @@ enable、disable 和 record 三者在任何 transport 上的语义一致（Host 
   "versionUpdated": [],
   "missing": [],
   "skipped": [
-    { "directoryName": "broken-ext", "failureCode": "ManifestMissing" }
+    { "directoryName": "broken-ext", "failureCode": "ManifestMissing", "message": "The extension manifest is missing." }
   ]
 }
 ```

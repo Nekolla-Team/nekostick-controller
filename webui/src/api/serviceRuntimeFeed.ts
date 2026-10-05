@@ -1,10 +1,10 @@
 import { connection } from '../stores/connection'
-import { defaultControllerBaseUrl, joinHostRoute } from './client'
+import { defaultControllerBaseUrl, joinHostRoute, parseApiErrorResponse, type ApiClientError } from './client'
 import { runtimePath } from './resources/services'
 import type { ServiceRuntimeFeedEntry } from './types'
 
 export type ServiceRuntimeFeedFailure =
-  | { kind: 'http'; status: number }
+  | { kind: 'http'; status: number; error?: ApiClientError }
   | { kind: 'network' }
   | { kind: 'truncated' }
 
@@ -50,7 +50,16 @@ export function openServiceRuntimeFeed(
       return
     }
 
-    if (!response.ok || !response.body) {
+    if (!response.ok) {
+      handlers.onFailure({
+        kind: 'http',
+        status: response.status,
+        error: await parseApiErrorResponse(response),
+      })
+      return
+    }
+
+    if (!response.body) {
       handlers.onFailure({ kind: 'http', status: response.status })
       return
     }

@@ -44,9 +44,20 @@ internal sealed partial class ControllerManagementCore
         }
 
         var feed = _runtimeFeedProvider?.Invoke();
-        return feed is null
-            ? ControllerRuntimeFeedResult.Rejected(ControllerManagementResponseBuilder.Unsupported(reason: "runtime_state_feed_unavailable", message: "This host does not provide a service runtime state feed."))
-            : ControllerRuntimeFeedResult.Opened(feed.Subscribe());
+        if (feed is null)
+        {
+            return ControllerRuntimeFeedResult.Rejected(ControllerManagementResponseBuilder.Unsupported(reason: "runtime_state_feed_unavailable", message: "This host does not provide a service runtime state feed."));
+        }
+
+        if (feed.SubscriptionRejected)
+        {
+            var message = string.IsNullOrWhiteSpace(feed.SubscriptionRejectionMessage)
+                ? "This host does not provide a service runtime state feed."
+                : feed.SubscriptionRejectionMessage;
+            return ControllerRuntimeFeedResult.Rejected(ControllerManagementResponseBuilder.Unsupported(reason: "runtime_state_feed_unavailable", message: message));
+        }
+
+        return ControllerRuntimeFeedResult.Opened(feed.Subscribe());
     }
 
     private async ValueTask<ControllerManagementResponse> ReadServiceRuntimeAsync(ControllerManagementRequest request, Guid serviceId, CancellationToken cancellationToken)

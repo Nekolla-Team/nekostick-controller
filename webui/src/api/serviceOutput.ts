@@ -1,5 +1,5 @@
 import { connection } from '../stores/connection';
-import { defaultControllerBaseUrl, joinHostRoute } from './client';
+import { defaultControllerBaseUrl, joinHostRoute, parseApiErrorResponse, type ApiClientError } from './client';
 import type { ServiceLogEntry } from './types';
 
 export type ServiceOutputStreamKind = 'stdout' | 'stderr';
@@ -71,7 +71,7 @@ export type ServiceOutputEndReason =
   | 'hostShutdown';
 
 export type ServiceOutputEventStreamFailure =
-  | { kind: 'http'; status: number; code?: string }
+  | { kind: 'http'; status: number; error?: ApiClientError }
   | { kind: 'network' }
   | { kind: 'truncated' };
 
@@ -106,12 +106,17 @@ export function openServiceOutputEventStream(
       return;
     }
 
-    if (!response.ok || !response.body) {
+    if (!response.ok) {
       handlers.onFailure({
         kind: 'http',
         status: response.status,
-        code: response.ok ? undefined : await readServiceOutputErrorCode(response),
+        error: await parseApiErrorResponse(response),
       });
+      return;
+    }
+
+    if (!response.body) {
+      handlers.onFailure({ kind: 'http', status: response.status });
       return;
     }
 
@@ -190,21 +195,6 @@ export function openServiceOutputEventStream(
   };
 }
 
-/**
- * Best-effort extraction of the controller error envelope's `code` from a failed response;
- * transport-level errors (proxy pages, empty 400s) carry no envelope and yield undefined.
- */
-async function readServiceOutputErrorCode(response: Response): Promise<string | undefined> {
-  try {
-    const body: unknown = await response.json();
-    if (body !== null && typeof body === 'object' && 'code' in body && typeof body.code === 'string') {
-      return body.code;
-    }
-  } catch {
-    // Not an envelope body; nothing more to report.
-  }
-  return undefined;
-}
 
 /** Decode one base64 SSE data frame into raw output bytes. */
 export function decodeServiceOutputChunk(data: string): Uint8Array {
