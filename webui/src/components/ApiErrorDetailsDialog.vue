@@ -47,6 +47,7 @@ const detailFields = computed<DescriptionField[]>(() => {
 
   const fields: DescriptionField[] = []
   if (hasValue(details.reason)) fields.push({ key: 'reason', label: t('errors.dialog.reason'), value: details.reason })
+  if (hasValue(details.cause)) fields.push({ key: 'cause', label: t('errors.dialog.cause'), value: details.cause })
   if (hasValue(details.parameter)) fields.push({ key: 'parameter', label: t('errors.dialog.parameter'), value: details.parameter })
   if (hasValue(details.expected)) fields.push({ key: 'expected', label: t('errors.dialog.expected'), value: details.expected })
   if (hasValue(details.actual)) fields.push({ key: 'actual', label: t('errors.dialog.actual'), value: details.actual })

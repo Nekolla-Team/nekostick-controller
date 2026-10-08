@@ -26,7 +26,7 @@ import {
   getSettings,
   putSettings,
 } from '../api/resources/extensions'
-import { getState, reloadSettings } from '../api/resources/controller'
+import { getState, isReloadDrop, reloadSettings } from '../api/resources/controller'
 import { globalSettingsPath } from '../api/resources/globalSettings'
 import { useCas } from '../composables/useCas'
 import { connection, saveConnection, stageConnection } from '../stores/connection'
@@ -313,11 +313,12 @@ async function save(): Promise<void> {
     )
     try {
       await cas.run(globalSettingsPath, (ifMatch) => reloadSettings(ifMatch))
-    } catch {
+    } catch (error: unknown) {
       // The settings PUT already persisted; the reload request crosses the transport it
-      // recycles (through the HostRoute it may surface as a bare 400), so its response says
-      // nothing about whether the reload applied. Proceed to reconnect, which probes the
-      // new endpoint for real.
+      // recycles, so a dropped or mangled response says nothing about whether the reload
+      // applied. Proceed to reconnect, which probes the new endpoint for real; any other
+      // failure is a real error.
+      if (!isReloadDrop(error)) throw error
     }
     if (await reconnect(next)) {
       message.success(t('controllerConfig.saved'))

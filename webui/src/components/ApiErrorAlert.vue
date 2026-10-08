@@ -44,6 +44,7 @@ const diagnosticLine = computed(() => {
   if (error.status !== undefined) parts.push(`${t('errors.dialog.status')}: ${error.status}`)
   if (error.code) parts.push(`${t('errors.dialog.code')}: ${error.code}`)
   if (error.details?.reason) parts.push(`${t('errors.dialog.reason')}: ${error.details.reason}`)
+  if (error.details?.cause) parts.push(`${t('errors.dialog.cause')}: ${error.details.cause}`)
   return parts.join(' · ')
 })
 const combinedLine = computed(() => {

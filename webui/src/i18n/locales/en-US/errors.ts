@@ -31,6 +31,7 @@ export const errors = {
     kind: 'Kind',
     message: 'Message',
     reason: 'Reason',
+    cause: 'Cause',
     parameter: 'Parameter',
     expected: 'Expected',
     actual: 'Actual',

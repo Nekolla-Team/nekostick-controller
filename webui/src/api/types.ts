@@ -8,6 +8,7 @@ export interface ApiErrorDetails {
   expected?: string | null | undefined
   actual?: string | null | undefined
   traceId?: string | null | undefined
+  cause?: string | null | undefined
 }
 
 export interface ApiFieldError {

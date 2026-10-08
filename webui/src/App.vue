@@ -42,8 +42,9 @@ import {
   IconSun,
   IconSystem,
 } from './components/icons'
-import { getState } from './api/resources/controller'
+import { getState, isReloadWindowError } from './api/resources/controller'
 import type { ControllerState } from './api/types'
+import { usePersistentError } from './composables/usePersistentError'
 import { connection } from './stores/connection'
 import { isDarkTheme, setThemeMode, theme, type ThemeMode } from './stores/theme'
 import { i18nState, setLocale, t, type Locale } from './i18n'
@@ -60,8 +61,10 @@ const controllerStateQuery = useQuery({
   refetchInterval: 5000,
 })
 const controllerState = computed<ControllerState | undefined>(() => controllerStateQuery.data.value)
-const controllerError = computed(() => controllerStateQuery.error.value)
 const controllerFetching = computed(() => controllerStateQuery.isFetching.value)
+// Reload-induced drops are silent (a reload recycles the transport under the poller), and any
+// other failure has to repeat before it shows, so the banner does not flicker each poll cycle.
+const controllerError = usePersistentError(controllerStateQuery, isReloadWindowError).error
 
 const isBare = computed(() => route.meta.bare === true)
 const appTheme = computed(() => (isDarkTheme.value ? darkTheme : null))

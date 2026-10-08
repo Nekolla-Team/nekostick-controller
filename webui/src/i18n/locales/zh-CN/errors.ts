@@ -31,6 +31,7 @@ export const errors = {
     kind: '错误类别',
     message: '消息',
     reason: '原因码',
+    cause: '底层错误',
     parameter: '参数',
     expected: '预期值',
     actual: '实际值',

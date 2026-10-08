@@ -241,7 +241,7 @@ function throwResponseError(status: number, envelope: Envelope<unknown>, etag: s
   }
   throw error;
 }
-function throwMalformedResponse(status: number, detail: string): never {
+function throwMalformedResponse(status: number, detail: string, details?: ApiErrorDetails): never {
   const kind: ApiErrorKind = status === 401 ? 'unauthorized' : 'transport';
   if (kind === 'unauthorized') {
     clearConnection();
@@ -250,6 +250,7 @@ function throwMalformedResponse(status: number, detail: string): never {
   throw new ApiClientError(detail, {
     status,
     kind,
+    details,
   });
 }
 
@@ -266,26 +267,41 @@ async function parseResponse(response: Response): Promise<ParsedResponse> {
   let body: string;
   try {
     body = await response.text();
-  } catch {
-    return throwMalformedResponse(status, 'The controller response could not be read.');
+  } catch (error) {
+    console.error('Reading the controller response body failed', {
+      status,
+      url: response.url,
+      error,
+    });
+    const cause = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    return throwMalformedResponse(status, 'The controller response could not be read.', {
+      reason: 'body_read_failed',
+      cause,
+    });
   }
 
   if (body.trim() === '') {
     if (status === 204) {
       return { envelope: null, data: null, etag, version: null };
     }
-    return throwMalformedResponse(status, 'The controller response had an empty body.');
+    return throwMalformedResponse(status, 'The controller response had an empty body.', {
+      reason: 'empty_body',
+    });
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(body) as unknown;
   } catch {
-    return throwMalformedResponse(status, 'The controller response was not valid JSON.');
+    return throwMalformedResponse(status, 'The controller response was not valid JSON.', {
+      reason: 'invalid_json',
+    });
   }
 
   if (!isEnvelope(parsed)) {
-    return throwMalformedResponse(status, 'The controller response was not a valid envelope.');
+    return throwMalformedResponse(status, 'The controller response was not a valid envelope.', {
+      reason: 'invalid_envelope',
+    });
   }
 
   if (status < 200 || status >= 300 || !parsed.ok) {

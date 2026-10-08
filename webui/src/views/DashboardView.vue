@@ -7,11 +7,12 @@ import { NAlert, NButton, NCard, NDescriptions, NDescriptionsItem, NGrid, NGridI
 import ApiErrorAlert from '../components/ApiErrorAlert.vue'
 import MetricChart from '../components/MetricChart.vue'
 import { IconDashboard, IconExtension, IconRoute, IconService } from '../components/icons'
-import { getState, getTelemetry, isReloadDrop, reloadSettings } from '../api/resources/controller'
+import { getState, getTelemetry, isReloadDrop, isReloadWindowError, reloadSettings } from '../api/resources/controller'
 import { globalSettingsPath } from '../api/resources/globalSettings'
 import { getRoot } from '../api/resources/root'
 import type { ControllerState, ControllerTelemetry } from '../api/types'
 import { useCas } from '../composables/useCas'
+import { usePersistentError } from '../composables/usePersistentError'
 import { t } from '../i18n'
 
 interface Series {
@@ -39,6 +40,11 @@ const telemetryQuery = useQuery({
   refetchInterval: 1500,
 })
 const reloadResult = ref<ControllerState | null>(null)
+// Both in-page pollers get the same two guards as the app-level state poll: silent during a
+// reload window (the reload recycles their transport too), otherwise reported only after
+// repeated failures so a per-poll flicker cannot toggle the alert.
+const stateError = usePersistentError(stateQuery, isReloadWindowError).error
+const telemetryError = usePersistentError(telemetryQuery, isReloadWindowError).error
 
 const reloadMutation = useMutation({
   mutationFn: () => cas.run(globalSettingsPath, (ifMatch) => reloadSettings(ifMatch)),
@@ -237,10 +243,10 @@ function formatDate(value: string | null): string {
       </div>
     </header>
 
-    <ApiErrorAlert v-if="stateQuery.isError.value" :error="stateQuery.error.value" />
+    <ApiErrorAlert v-if="stateError" :error="stateError" />
     <ApiErrorAlert v-if="rootQuery.isError.value" :error="rootQuery.error.value" />
     <ApiErrorAlert v-if="reloadMutation.isError.value && !reloadUncertain" :error="reloadMutation.error.value" />
-    <ApiErrorAlert v-if="telemetryQuery.isError.value" :error="telemetryQuery.error.value" />
+    <ApiErrorAlert v-if="telemetryError" :error="telemetryError" />
     <n-alert v-if="reloadUncertain" type="warning" :show-icon="true">
       {{ t('dashboard.reload.uncertain') }}
     </n-alert>
