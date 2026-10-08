@@ -907,7 +907,7 @@ public sealed class FakeHostBridge : IExtensionHostBridge14
 
         public ValueTask<ExtensionEndpointResolutionResult> ResolveAsync(Guid serviceId, CancellationToken cancellationToken) =>
             ValueTask.FromResult(ExtensionEndpointResolutionResult.Success(
-                new ExtensionEndpointLease(serviceId, 1, DateTimeOffset.UtcNow)));
+                new ExtensionEndpointLease(serviceId, Guid.CreateVersion7(), 1, DateTimeOffset.UtcNow)));
     }
 
     private sealed class FakeLifecycleApi : IExtensionLifecycleApi
