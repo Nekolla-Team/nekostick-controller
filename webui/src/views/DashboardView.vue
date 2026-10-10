@@ -66,6 +66,8 @@ const rootLoading = computed(() => rootQuery.isLoading.value)
 const reloadPending = computed(() => reloadMutation.isPending.value)
 
 const TELEMETRY_SAMPLE_LIMIT = 80
+// Must equal telemetryQuery's refetchInterval: padding labels are back-computed with it.
+const SAMPLE_PERIOD_MS = 1500
 const samples = ref<ControllerTelemetry[]>([])
 watch(
   () => telemetryQuery.data.value,
@@ -79,27 +81,40 @@ watch(
 )
 const latest = computed(() => samples.value[samples.value.length - 1])
 
-const sampleTimes = computed(() =>
-  samples.value.map((s) => new Date(s.timestampUnixMs).toLocaleTimeString(undefined, { hour12: false })),
-)
+// The display window is fixed at TELEMETRY_SAMPLE_LIMIT slots: fewer stored samples render as
+// leading null padding so every point keeps the same horizontal spacing from the first render.
+const padCount = computed(() => Math.max(0, TELEMETRY_SAMPLE_LIMIT - samples.value.length))
+
+function formatSampleTime(timestampUnixMs: number): string {
+  return new Date(timestampUnixMs).toLocaleTimeString(undefined, { hour12: false })
+}
+
+const sampleTimes = computed(() => {
+  const firstTimestamp = samples.value[0]?.timestampUnixMs ?? Date.now()
+  const padding = Array.from({ length: padCount.value }, (_, index) =>
+    formatSampleTime(firstTimestamp - (padCount.value - index) * SAMPLE_PERIOD_MS),
+  )
+  return [...padding, ...samples.value.map((s) => formatSampleTime(s.timestampUnixMs))]
+})
 
 const memorySeries = computed<Series[]>(() => {
+  const padding: Array<number | null> = Array<number | null>(padCount.value).fill(null)
   const series: Series[] = [
     {
       color: '#3fb27f',
-      data: samples.value.map((s) => s.process.workingSetBytes),
+      data: [...padding, ...samples.value.map((s) => s.process.workingSetBytes)],
       name: t('dashboard.metrics.series.workingSet'),
     },
     {
       color: '#c2255c',
-      data: samples.value.map((s) => s.runtime.managedHeapBytes),
+      data: [...padding, ...samples.value.map((s) => s.runtime.managedHeapBytes)],
       name: t('dashboard.metrics.series.managedHeap'),
     },
   ]
   if (latest.value?.host != null) {
     series.push({
       color: '#eba937',
-      data: samples.value.map((s) => s.host?.memoryUsedBytes ?? null),
+      data: [...padding, ...samples.value.map((s) => s.host?.memoryUsedBytes ?? null)],
       name: t('dashboard.metrics.series.hostUsed'),
     })
   }
@@ -107,17 +122,18 @@ const memorySeries = computed<Series[]>(() => {
 })
 
 const cpuSeries = computed<Series[]>(() => {
+  const padding: Array<number | null> = Array<number | null>(padCount.value).fill(null)
   const series: Series[] = [
     {
       color: '#c2255c',
-      data: samples.value.map((s) => s.process.cpuPercent),
+      data: [...padding, ...samples.value.map((s) => s.process.cpuPercent)],
       name: t('dashboard.metrics.series.processCpu'),
     },
   ]
   if (latest.value?.host != null) {
     series.push({
       color: '#4c8dff',
-      data: samples.value.map((s) => s.host?.cpuPercent ?? null),
+      data: [...padding, ...samples.value.map((s) => s.host?.cpuPercent ?? null)],
       name: t('dashboard.metrics.series.hostCpu'),
     })
   }

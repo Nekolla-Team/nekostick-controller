@@ -45,6 +45,7 @@ function buildOption(): echarts.EChartsCoreOption {
     },
     series: props.series.map((s) => ({
       areaStyle: { opacity: 0.12 },
+      connectNulls: true,
       data: s.data,
       emphasis: { disabled: true },
       itemStyle: { color: s.color },
